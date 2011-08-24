@@ -55,7 +55,18 @@ Upcoming changes</a>
 <!-- Record your changes in the trunk here. -->
 <div id="trunk" style="display:none"><!--=TRUNK-BEGIN=-->
 <ul class=image>
-  <li class=>
+  <li class=bug>
+    CLI clients should be able to see plugin classes
+    <a href="http://jenkins.361315.n4.nabble.com/channel-example-and-plugin-classes-gives-ClassNotFoundException-tp3756092p3756092.html">report</a>
+  <li class=bug>
+    Fixed NPE in running <tt>assembly:assembly</tt> with Maven3
+    (<a href="https://issues.jenkins-ci.org/browse/JENKINS-8837">issue 8837</a>)
+  <li class=bug>
+    Fixed a bug in one of the file copy operations that caused the copy-artifact plugin to fail to preserve the timestamp.
+    (<a href="https://issues.jenkins-ci.org/browse/JENKINS-10805">issue 10805</a>)
+  <li class=bug>
+    Jenkins didn't start on IBM JDK.
+    (<a href="https://issues.jenkins-ci.org/browse/JENKINS-10810">issue 10810</a>)
 </ul>
 </div><!--=TRUNK-END=-->
 
