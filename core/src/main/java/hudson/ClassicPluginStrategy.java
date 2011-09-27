@@ -227,8 +227,10 @@ public class ClassicPluginStrategy implements PluginStrategy {
             if (shortName.equals(yourName))   return;
 
             // some earlier versions of maven-hpi-plugin apparently puts "null" as a literal in Hudson-Version. watch out for them.
-            String hudsonVersion = atts.getValue("Hudson-Version");
-            if (hudsonVersion == null || hudsonVersion.equals("null") || new VersionNumber(hudsonVersion).compareTo(splitWhen) <= 0)
+            String jenkinsVersion = atts.getValue("Jenkins-Version");
+            if (jenkinsVersion==null)
+                jenkinsVersion = atts.getValue("Hudson-Version");
+            if (jenkinsVersion == null || jenkinsVersion.equals("null") || new VersionNumber(jenkinsVersion).compareTo(splitWhen) <= 0)
                 optionalDependencies.add(new PluginWrapper.Dependency(shortName+':'+requireVersion));
         }
     }
@@ -236,7 +238,9 @@ public class ClassicPluginStrategy implements PluginStrategy {
     private static final List<DetachedPlugin> DETACHED_LIST = Arrays.asList(
         new DetachedPlugin("maven-plugin","1.296","1.296"),
         new DetachedPlugin("subversion","1.310","1.0"),
-        new DetachedPlugin("cvs","1.340","0.1")
+        new DetachedPlugin("cvs","1.340","0.1"),
+        new DetachedPlugin("ant","1.430.*","1.0"),
+        new DetachedPlugin("javadoc","1.430.*","1.0")
     );
 
     /**
@@ -289,8 +293,8 @@ public class ClassicPluginStrategy implements PluginStrategy {
     }
 
     public void load(PluginWrapper wrapper) throws IOException {
-        // override the context classloader so that XStream activity in plugin.start()
-        // will be able to resolve classes in this plugin
+        // override the context classloader. This no longer makes sense,
+        // but it is left for the backward compatibility
         ClassLoader old = Thread.currentThread().getContextClassLoader();
         Thread.currentThread().setContextClassLoader(wrapper.classLoader);
         try {

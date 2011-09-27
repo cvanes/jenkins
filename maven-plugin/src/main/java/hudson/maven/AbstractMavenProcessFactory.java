@@ -150,6 +150,7 @@ public abstract class AbstractMavenProcessFactory
         private static final long serialVersionUID = 1L;
 
         static final class AcceptorImpl implements Acceptor, Serializable {
+            private static final long serialVersionUID = -2226788819948521018L;
             private transient final ServerSocket serverSocket;
             private transient Socket socket;
 
@@ -184,6 +185,8 @@ public abstract class AbstractMavenProcessFactory
     }
     
     private static final class GetCharset implements Callable<String,IOException> {
+        private static final long serialVersionUID = 3459269768733083577L;
+
         public String call() throws IOException {
             return System.getProperty("file.encoding");
         }
@@ -252,7 +255,7 @@ public abstract class AbstractMavenProcessFactory
 
     public String getMavenOpts() {
         if( this.mavenOpts != null )
-            return this.mavenOpts;
+            return addRunHeadLessOption(this.mavenOpts);
 
         String mavenOpts = mms.getMavenOpts();
 
@@ -274,6 +277,13 @@ public abstract class AbstractMavenProcessFactory
             }
         }
 
+        mavenOpts = addRunHeadLessOption(mavenOpts);
+
+        return envVars.expand(mavenOpts);
+    }
+
+    protected String addRunHeadLessOption(String mavenOpts) {
+
         if (mms.runHeadless()) {
             // Configure headless process
             if (mavenOpts == null) {
@@ -289,8 +299,7 @@ public abstract class AbstractMavenProcessFactory
                 // TODO mavenOpts += " -Xdock:name=Jenkins -Xdock:icon=jenkins.png";
             }
         }
-
-        return envVars.expand(mavenOpts);
+        return mavenOpts;
     }
 
 
@@ -309,6 +318,8 @@ public abstract class AbstractMavenProcessFactory
 
     
     protected static final class GetRemotingJar implements Callable<String,IOException> {
+        private static final long serialVersionUID = 6022357183425911351L;
+
         public String call() throws IOException {
             return Which.jarFile(hudson.remoting.Launcher.class).getPath();
         }

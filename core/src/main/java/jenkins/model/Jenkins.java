@@ -25,6 +25,8 @@
  */
 package jenkins.model;
 
+import com.google.inject.Injector;
+import hudson.model.Messages;
 import hudson.model.Node;
 import hudson.model.AbstractCIBase;
 import hudson.model.AbstractProject;
@@ -1762,7 +1764,10 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
     public String getRootUrl() {
         // for compatibility. the actual data is stored in Mailer
         String url = Mailer.descriptor().getUrl();
-        if(url!=null)   return url;
+        if(url!=null) {
+            if (!url.endsWith("/")) url += '/';
+            return url;
+        }
 
         StaplerRequest req = Stapler.getCurrentRequest();
         if(req!=null)
@@ -1933,6 +1938,16 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
 
     public Lifecycle getLifecycle() {
         return Lifecycle.get();
+    }
+
+    /**
+     * Gets the dependency injection container that hosts all the extension implementations and other
+     * components in Jenkins.
+     *
+     * @since 1.GUICE
+     */
+    public Injector getInjector() {
+        return lookup(Injector.class);
     }
 
     /**
@@ -3125,7 +3140,7 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
 
     private void doScript(StaplerRequest req, StaplerResponse rsp, RequestDispatcher view) throws IOException, ServletException {
         // ability to run arbitrary script is dangerous
-        checkPermission(ADMINISTER);
+        checkPermission(RUN_SCRIPTS);
 
         String text = req.getParameter("script");
         if (text != null) {
@@ -3621,6 +3636,7 @@ public class Jenkins extends AbstractCIBase implements ModifiableItemGroup<TopLe
     public static final PermissionGroup PERMISSIONS = Permission.HUDSON_PERMISSIONS;
     public static final Permission ADMINISTER = Permission.HUDSON_ADMINISTER;
     public static final Permission READ = new Permission(PERMISSIONS,"Read",Messages._Hudson_ReadPermission_Description(),Permission.READ,PermissionScope.JENKINS);
+    public static final Permission RUN_SCRIPTS = new Permission(PERMISSIONS, "RunScripts", Messages._Hudson_RunScriptsPermission_Description(),ADMINISTER,PermissionScope.JENKINS);
 
     /**
      * {@link Authentication} object that represents the anonymous user.
