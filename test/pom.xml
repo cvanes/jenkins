@@ -89,14 +89,12 @@ THE SOFTWARE.
     </dependency>
     <dependency>
       <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
-      <version>4.8.2</version>
+      <artifactId>junit-dep</artifactId>
     </dependency>
-    <!--dependency>
-      <groupId>org.openqa.selenium.client-drivers</groupId>
-      <artifactId>selenium-java-client-driver</artifactId>
-      <version>1.0-beta-1</version>
-    </dependency-->
+    <dependency>
+      <groupId>org.hamcrest</groupId>
+      <artifactId>hamcrest-library</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.jenkins-ci</groupId>
       <artifactId>htmlunit</artifactId>
@@ -134,7 +132,6 @@ THE SOFTWARE.
     <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-core</artifactId>
-      <version>1.8.5</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
