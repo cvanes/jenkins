@@ -29,7 +29,7 @@ THE SOFTWARE.
   <parent>
     <groupId>org.jenkins-ci.main</groupId>
     <artifactId>pom</artifactId>
-    <version>1.436-SNAPSHOT</version>
+    <version>1.438-SNAPSHOT</version>
   </parent>
 
   <artifactId>maven-plugin</artifactId>
@@ -60,12 +60,22 @@ THE SOFTWARE.
       </dependency>
       <dependency>
         <groupId>org.slf4j</groupId>
+        <artifactId>jcl-over-slf4j</artifactId>
+        <version>${slf4jVersion}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.slf4j</groupId>
         <artifactId>slf4j-nop</artifactId>
         <version>${slf4jVersion}</version>
       </dependency>
       <dependency>
         <groupId>org.slf4j</groupId>
         <artifactId>slf4j-jdk14</artifactId>
+        <version>${slf4jVersion}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>jcl-over-slf4j</artifactId>
         <version>${slf4jVersion}</version>
       </dependency>
     </dependencies>
@@ -134,9 +144,15 @@ THE SOFTWARE.
     <dependency>
       <groupId>org.jenkins-ci.lib</groupId>
       <artifactId>config-provider-model</artifactId>
-      <version>1.0</version>
+      <version>1.1</version>
     </dependency>
-    
+    <!-- the dependency between config-file-provider and maven-plugin should be in the other direction  -->
+<!--     <dependency> -->
+<!-- 	  <groupId>org.jenkins-ci.plugins</groupId> -->
+<!-- 	  <artifactId>config-file-provider</artifactId> -->
+<!-- 	  <version>1.2-SNAPSHOT</version> -->
+<!-- 	  <optional>true</optional> -->
+<!--     </dependency> -->
     <dependency>
       <groupId>org.apache.ant</groupId>
       <artifactId>ant</artifactId>
