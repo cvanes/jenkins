@@ -46,6 +46,7 @@ import hudson.model.Computer;
 import hudson.model.Environment;
 import hudson.model.Executor;
 import hudson.model.Fingerprint;
+import hudson.model.Node;
 import hudson.model.ParameterDefinition;
 import hudson.model.ParametersAction;
 import hudson.model.ParametersDefinitionProperty;
@@ -162,10 +163,20 @@ public class MavenModuleSetBuild extends AbstractMavenBuild<MavenModuleSet,Maven
         if (mvn == null)
             throw new AbortException(Messages.MavenModuleSetBuild_NoMavenConfigured());
 
-        mvn = mvn.forEnvironment(envs).forNode(
-                Computer.currentComputer().getNode(), log);
-        envs.put("M2_HOME", mvn.getHome());
-        envs.put("PATH+MAVEN", mvn.getHome() + "/bin");
+        
+        mvn = mvn.forEnvironment(envs);
+        
+        Computer computer = Computer.currentComputer();
+        if (computer != null) { // just in case were not in a build
+            Node node = computer.getNode();
+            if (node != null) {
+                mvn = mvn.forNode(node, log);
+                
+                envs.put("M2_HOME", mvn.getHome());
+                envs.put("PATH+MAVEN", mvn.getHome() + "/bin");
+            }
+        }
+        
         return envs;
     }
 
@@ -690,8 +701,7 @@ public class MavenModuleSetBuild extends AbstractMavenBuild<MavenModuleSet,Maven
                         
                         ProcessCache.MavenProcess process = null;
                         
-                        boolean maven3orLater = MavenUtil.maven3orLater( mavenVersion ); 
-                       
+                        boolean maven3orLater = mavenBuildInformation.isMaven3OrLater(); 
                         if ( maven3orLater )
                         {
                             LOGGER.fine( "using maven 3 " + mavenVersion );
@@ -1179,7 +1189,7 @@ public class MavenModuleSetBuild extends AbstractMavenBuild<MavenModuleSet,Maven
                 // FIXME handle 3.1 level when version will be here : no rush :-)
                 // or made something configurable tru the ui ?
                 ReactorReader reactorReader = null;
-                boolean maven3OrLater = new ComparableVersion (mavenVersion).compareTo( new ComparableVersion ("3.0") ) >= 0;
+                boolean maven3OrLater = MavenUtil.maven3orLater(mavenVersion);
                 if (maven3OrLater) {
                     mavenEmbedderRequest.setValidationLevel( ModelBuildingRequest.VALIDATION_LEVEL_MAVEN_3_0 );
                 } else {
