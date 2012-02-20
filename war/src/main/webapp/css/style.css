@@ -324,6 +324,9 @@ table.pane {
   border-collapse: collapse;
   border: 1px #bbb solid;
 }
+table.pane > tbody > tr > td:last-child {
+  border-right: 1px #bbb solid;
+}
 
 td.pane {
   border: 1px #bbb solid;
@@ -466,6 +469,33 @@ LABEL.attach-previous {
     margin-left: 0.5em;
 }
 
+#bottom-sticker {
+    width:  100%;   /* it needs to occupy the entire width or else the underlying content will see through */
+}
+.bottom-sticker-inner {
+    background:white;
+    padding:1em;
+}
+.bottom-sticker-edge {
+    height:16px;
+    background-image: url("../images/bottom-sticker-top-edge.png");
+    background-repeat: repeat-x;
+}
+
+#top-sticker {
+    width:  100%;   /* it needs to occupy the entire width or else the underlying content will see through */
+    z-index: 1;
+}
+.top-sticker-inner {
+    background:white;
+    padding:1em;
+}
+.top-sticker-edge {
+    height:16px;
+    background-image: url("../images/top-sticker-bottom-edge.png");
+    background-repeat: repeat-x;
+}
+
 /* ======================== error/warning message (mainly in the form.) Use them on block elements ======================== */
 .error {
     color: #CC0000;
@@ -502,7 +532,7 @@ LABEL.attach-previous {
     font-weight: bold;
     padding-left: 20px;
     min-height: 16px;
-    background-image: url( "../images/16x16/go-next.gif" ); /* TODO: get a better icon */
+    background-image: url( "../images/16x16/go-next.png" ); /* TODO: get a better icon */
     background-position: left center;
     background-repeat: no-repeat;
 }
@@ -530,6 +560,11 @@ LABEL.attach-previous {
   background-color: #f0f0f0;
   padding: 1em;
   margin-bottom: 1em;
+}
+
+.help .from-plugin {
+    text-align: right;
+    color: #666;
 }
 
 .help-area {
@@ -972,6 +1007,17 @@ table.progress-bar.red td.progress-bar-done {
   background-color: #cc0000;
 }
 
+/* ========================= notification bar ========================= */
+#notification-bar {
+    width:100%;
+    position:fixed;
+    text-align:center;
+    left:0px;
+    font-size: 2em;
+    z-index:999;
+    border-bottom: 1px solid black;
+}
+
 /* ========================= YUI dialog ========================= */
 
 .dialog .hd {
@@ -1012,4 +1058,31 @@ table.progress-bar.red td.progress-bar-done {
 .textarea-preview {
     background-color: #F0F0F0;
     padding: 0.5em;
+}
+
+/* ========================= matrix configuration table ================== */
+table#configuration-matrix {
+	border: 1px #BBBBBB solid;
+	border-collapse: collapse;
+}
+tr.matrix-row {
+	background: #f0f0f0;
+	font-weight: bold;
+}
+td.matrix-header {
+	border: 1px #BBBBBB solid;
+	padding: 3px;
+}
+td#matrix-title {
+	padding: 3px;
+}
+td.matrix-leftcolumn {
+	border: 1px #BBBBBB solid;
+	font-weight: bold;
+	background: #f0f0f0;
+	padding: 3px;
+}
+td.matrix-cell {
+	border: 1px #BBBBBB solid;
+	text-align: center;
 }

@@ -129,6 +129,7 @@ var FormChecker = {
                 Behaviour.applySubtree(next.target);
                 FormChecker.inProgress--;
                 FormChecker.schedule();
+                layoutUpdateCallback.call();
             }
         });
         this.inProgress++;
@@ -587,6 +588,64 @@ var hudsonRules = {
         e = null; // avoid memory leak
     },
 
+    "INPUT.applyButton":function (e) {
+        var id = "iframe"+(iota++);
+
+        var responseDialog = new YAHOO.widget.Panel("wait"+(iota++), {
+            fixedcenter:true,
+            close:true,
+            draggable:true,
+            zindex:4,
+            modal:true,
+            visible:false
+        });
+
+        responseDialog.setHeader("Error");
+        responseDialog.setBody("<iframe id='"+id+"' name='"+id+"' style='height:100%; width:100%'></iframe>");
+        responseDialog.render(document.body);
+        var target = $(id); // iframe
+
+        function attachIframeOnload(target, f) {
+            if (target.attachEvent) {
+                target.attachEvent("onload", f);
+            } else {
+                target.onload = f;
+            }
+        }
+
+        var attached = false;
+        makeButton(e,function (e) {
+            var f = findAncestor(e.target, "FORM");
+
+            if (!attached) {
+                attached = true;
+                attachIframeOnload(target, function () {
+                    if (target.contentWindow && target.contentWindow.applyCompletionHandler) {
+                        // apply-aware server is expected to set this handler
+                        target.contentWindow.applyCompletionHandler(window);
+                    } else {
+                        // otherwise this is possibly an error from the server, so we need to render the whole content.
+                        var r = YAHOO.util.Dom.getClientRegion();
+                        responseDialog.cfg.setProperty("width",r.width*3/4+"px");
+                        responseDialog.cfg.setProperty("height",r.height*3/4+"px");
+                        responseDialog.center();
+                        responseDialog.show();
+                    }
+                });
+            }
+
+            f.target = target.id;
+            f.elements['core:apply'].value = "true";
+            try {
+                buildFormTree(f);
+                f.submit();
+            } finally {
+                f.elements['core:apply'].value = null;
+                f.target = null;
+            }
+        });
+    },
+
     "INPUT.advancedButton" : function(e) {
         makeButton(e,function(e) {
             var link = e.target;
@@ -714,14 +773,18 @@ var hudsonRules = {
                 new Ajax.Request(this.getAttribute("helpURL"), {
                     method : 'get',
                     onSuccess : function(x) {
-                        div.innerHTML = x.responseText;
+                        var from = x.getResponseHeader("X-Plugin-From");
+                        div.innerHTML = x.responseText+(from?"<div class='from-plugin'>"+from+"</div>":"");
+                        layoutUpdateCallback.call();
                     },
                     onFailure : function(x) {
                         div.innerHTML = "<b>ERROR</b>: Failed to load help file: " + x.statusText;
+                        layoutUpdateCallback.call();
                     }
                 });
             } else {
                 div.style.display = "none";
+                layoutUpdateCallback.call();
             }
 
             return false;
@@ -746,6 +809,72 @@ var hudsonRules = {
         scroller.setAttribute("style","border:1px solid black;");
         scroller.style.height = h+"px";
     },
+
+    // Script Console : settings and shortcut key
+    "TEXTAREA.script" : function(e) {
+        (function() {
+            var cmdKeyDown = false;
+            var mode = e.getAttribute("script-mode") || "text/x-groovy";
+            var readOnly = eval(e.getAttribute("script-readOnly")) || false;
+            
+            var w = CodeMirror.fromTextArea(e,{
+              mode: mode,
+              lineNumbers: true,
+              matchBrackets: true,
+              readOnly: readOnly,
+              onKeyEvent: function(editor, event){
+                function isGeckoCommandKey() {
+                    return Prototype.Browser.Gecko && event.keyCode == 224
+                }
+                function isOperaCommandKey() {
+                    return Prototype.Browser.Opera && event.keyCode == 17
+                }
+                function isWebKitCommandKey() {
+                    return Prototype.Browser.WebKit && (event.keyCode == 91 || event.keyCode == 93)
+                }
+                function isCommandKey() {
+                    return isGeckoCommandKey() || isOperaCommandKey() || isWebKitCommandKey();
+                }
+                function isReturnKeyDown() {
+                    return event.type == 'keydown' && event.keyCode == Event.KEY_RETURN;
+                }
+                function getParentForm(element) {
+                    if (element == null) throw 'not found a parent form';
+                    if (element instanceof HTMLFormElement) return element;
+                    
+                    return getParentForm(element.parentNode);
+                }
+                function saveAndSubmit() {
+                    editor.save();
+                    getParentForm(e).submit();
+                    event.stop();
+                }
+                
+                // Mac (Command + Enter)
+                if (navigator.userAgent.indexOf('Mac') > -1) {
+                    if (event.type == 'keydown' && isCommandKey()) {
+                        cmdKeyDown = true;
+                    }
+                    if (event.type == 'keyup' && isCommandKey()) {
+                        cmdKeyDown = false;
+                    }
+                    if (cmdKeyDown && isReturnKeyDown()) {
+                        saveAndSubmit();
+                        return true;
+                    }
+                  
+                // Windows, Linux (Ctrl + Enter)
+                } else {
+                    if (event.ctrlKey && isReturnKeyDown()) {
+                        saveAndSubmit();
+                        return true;
+                    }
+                }
+              }
+            }).getWrapperElement();
+            w.setAttribute("style","border:1px solid black; margin-top: 1em; margin-bottom: 1em")
+        })();
+	},
 
 // deferred client-side clickable map.
 // this is useful where the generation of <map> element is time consuming
@@ -877,6 +1006,54 @@ var hudsonRules = {
         e.setAttribute("ref", checkbox.id = "cb"+(iota++));
     },
 
+    // radioBlock.jelly
+    "INPUT.radio-block-control" : function(r) {
+        r.id = "radio-block-"+(iota++);
+
+        // when one radio button is clicked, we need to update foldable block for
+        // other radio buttons with the same name. To do this, group all the
+        // radio buttons with the same name together and hang it under the form object
+        var f = r.form;
+        var radios = f.radios;
+        if (radios == null)
+            f.radios = radios = {};
+
+        var g = radios[r.name];
+        if (g == null) {
+            radios[r.name] = g = object(radioBlockSupport);
+            g.buttons = [];
+        }
+
+        var s = findAncestorClass(r,"radio-block-start");
+        s.setAttribute("ref", r.id);
+
+        // find the end node
+        var e = (function() {
+            var e = s;
+            var cnt=1;
+            while(cnt>0) {
+                e = e.nextSibling;
+                if (Element.hasClassName(e,"radio-block-start"))
+                    cnt++;
+                if (Element.hasClassName(e,"radio-block-end"))
+                    cnt--;
+            }
+            return e;
+        })();
+
+        var u = function() {
+            g.updateSingleButton(r,s,e);
+        };
+        g.buttons.push(u);
+
+        // apply the initial visibility
+        u();
+
+        // install event handlers to update visibility.
+        // needs to use onclick and onchange for Safari compatibility
+        r.onclick = r.onchange = function() { g.updateButtons(); };
+    },
+
     // see RowVisibilityGroupTest
     "TR.rowvg-start" : function(e) {
         // figure out the corresponding end marker
@@ -934,6 +1111,7 @@ var hudsonRules = {
                         e.style.display = display;
                     }
                 }
+                layoutUpdateCallback.call();
             },
 
             /**
@@ -964,6 +1142,9 @@ var hudsonRules = {
         }
         var start = e;
 
+        // @ref on start refers to the ID of the element that controls the JSON object created from these rows
+        // if we don't find it, turn the start node into the governing node (thus the end result is that you
+        // created an intermediate JSON object that's always on.)
         var ref = start.getAttribute("ref");
         if(ref==null)
             start.id = ref = "rowSetStart"+(iota++);
@@ -1026,54 +1207,6 @@ var hudsonRules = {
                 if (inputs[i].defaultChecked) inputs[i].checked = true;
             }
         }
-    },
-
-    // radioBlock.jelly
-    "INPUT.radio-block-control" : function(r) {
-        r.id = "radio-block-"+(iota++);
-
-        // when one radio button is clicked, we need to update foldable block for
-        // other radio buttons with the same name. To do this, group all the
-        // radio buttons with the same name together and hang it under the form object
-        var f = r.form;
-        var radios = f.radios;
-        if (radios == null)
-            f.radios = radios = {};
-
-        var g = radios[r.name];
-        if (g == null) {
-            radios[r.name] = g = object(radioBlockSupport);
-            g.buttons = [];
-        }
-
-        var s = findAncestorClass(r,"radio-block-start");
-
-        // find the end node
-        var e = (function() {
-            var e = s;
-            var cnt=1;
-            while(cnt>0) {
-                e = e.nextSibling;
-                if (Element.hasClassName(e,"radio-block-start"))
-                    cnt++;
-                if (Element.hasClassName(e,"radio-block-end"))
-                    cnt--;
-            }
-            return e;
-        })();
-
-        var u = function() {
-            g.updateSingleButton(r,s,e);
-        };
-        applyNameRef(s,e,r.id);
-        g.buttons.push(u);
-
-        // apply the initial visibility
-        u();
-
-        // install event handlers to update visibility.
-        // needs to use onclick and onchange for Safari compatibility
-        r.onclick = r.onchange = function() { g.updateButtons(); };
     },
 
     // editableComboBox.jelly
@@ -1211,6 +1344,7 @@ var hudsonRules = {
                 $(hidePreview).show();
                 $(previewDiv).show();
                 previewDiv.innerHTML = txt;
+                layoutUpdateCallback.call();
             };
 
             new Ajax.Request(rootURL + showPreview.getAttribute("previewEndpoint"), {
@@ -1233,6 +1367,70 @@ var hudsonRules = {
             $(hidePreview).hide();
             $(previewDiv).hide();
         };
+    },
+
+    /*
+        Use on div tag to make it sticky visible on the bottom of the page.
+        When page scrolls it remains in the bottom of the page
+        Convenient on "OK" button and etc for a long form page
+     */
+    "#bottom-sticker" : function(sticker) {
+        var DOM = YAHOO.util.Dom;
+
+        var shadow = document.createElement("div");
+        sticker.parentNode.insertBefore(shadow,sticker);
+
+        var edge = document.createElement("div");
+        edge.className = "bottom-sticker-edge";
+        sticker.insertBefore(edge,sticker.firstChild);
+
+        function adjustSticker() {
+            shadow.style.height = sticker.offsetHeight + "px";
+
+            var viewport = DOM.getClientRegion();
+            var pos = DOM.getRegion(shadow);
+
+            sticker.style.position = "fixed";
+            sticker.style.bottom = Math.max(0, viewport.bottom - pos.bottom) + "px"
+            sticker.style.left = Math.max(0,pos.left-viewport.left) + "px"
+        }
+
+        // react to layout change
+        Element.observe(window,"scroll",adjustSticker);
+        Element.observe(window,"resize",adjustSticker);
+        // initial positioning
+        Element.observe(window,"load",adjustSticker);
+        adjustSticker();
+        layoutUpdateCallback.add(adjustSticker);
+    },
+
+    "#top-sticker" : function(sticker) {
+        var DOM = YAHOO.util.Dom;
+
+        var shadow = document.createElement("div");
+        sticker.parentNode.insertBefore(shadow,sticker);
+
+        var edge = document.createElement("div");
+        edge.className = "top-sticker-edge";
+        sticker.insertBefore(edge);
+
+        function adjustSticker() {
+            shadow.style.height = sticker.offsetHeight + "px";
+
+            var viewport = DOM.getClientRegion();
+            var pos = DOM.getRegion(shadow);
+
+            sticker.style.position = "fixed";
+            sticker.style.top = Math.max(0, pos.top-viewport.top) + "px"
+            sticker.style.left = Math.max(0,pos.left-viewport.left) + "px"
+        }
+
+        // react to layout change
+        Element.observe(window,"scroll",adjustSticker);
+        Element.observe(window,"resize",adjustSticker);
+        // initial positioning
+        Element.observe(window,"load",adjustSticker);
+        adjustSticker();
     }
 };
 
@@ -1309,12 +1507,17 @@ function replaceDescription() {
                 Behaviour.applySubtree(d);
                 d.getElementsByTagName("TEXTAREA")[0].focus();
             });
+            layoutUpdateCallback.call();
           }
         }
     );
     return false;
 }
 
+/**
+ * Indicates that form fields from rows [s,e) should be grouped into a JSON object,
+ * and attached under the element identified by the specified id.
+ */
 function applyNameRef(s,e,id) {
     $(id).groupingNode = true;
     // s contains the node itself
@@ -1483,6 +1686,7 @@ function refreshPart(id,url) {
                 p.insertBefore(node, next);
 
                 Behaviour.applySubtree(node);
+                layoutUpdateCallback.call();
 
                 if(isRunAsTest) return;
                 refreshPart(id,url);
@@ -1651,7 +1855,7 @@ var repeatableSupport = {
 
 // prototype object to be duplicated for each radio button group
 var radioBlockSupport = {
-    buttons : null,
+    buttons : null, // set of functions, one for updating one radio block each
 
     updateButtons : function() {
         for( var i=0; i<this.buttons.length; i++ )
@@ -1660,29 +1864,15 @@ var radioBlockSupport = {
 
     // update one block based on the status of the given radio button
     updateSingleButton : function(radio, blockStart, blockEnd) {
-        var tbl = blockStart.parentNode;
-        var i = false;
-        var o = false;
         var show = radio.checked;
-
-        for (var j = 0; tbl.rows[j]; j++) {
-            var n = tbl.rows[j];
-
-            if (n == blockEnd)
-                o = true;
-
-            if (i && !o) {
-                if (show)
-                    n.style.display = "";
-                else
-                    n.style.display = "none";
-            }
-
-            if (n == blockStart) {
-                i = true;
-                if (n.getAttribute('hasHelp') == 'true')
-                    j++;
-            }
+        
+        if (blockStart.getAttribute('hasHelp') == 'true') {
+            n = blockStart.nextSibling;
+        } else {
+            n = blockStart;
+        }
+        while((n = n.nextSibling) != blockEnd) {
+          n.style.display = show ? "" : "none";
         }
     }
 };
@@ -1786,6 +1976,7 @@ function createSearchBox(searchURL) {
     };
     var ac = new YAHOO.widget.AutoComplete("search-box","search-box-completion",ds);
     ac.typeAhead = false;
+    ac.autoHighlight = false;
 
     var box   = $("search-box");
     var sizer = $("search-box-sizer");
@@ -2348,6 +2539,7 @@ function validateButton(checkUrl,paramList,button) {
                 + '\').style.display=\'block\';return false">ERROR</a><div id="valerr'
                 + i + '" style="display:none">' + rsp.responseText + '</div>';
           Behaviour.applySubtree(target);
+          layoutUpdateCallback.call();
           var s = rsp.getResponseHeader("script");
           if(s!=null)
             try {
@@ -2396,3 +2588,96 @@ function createComboBox(idOrField,valueFunction) {
 Ajax.Request.prototype.dispatchException = function(e) {
     throw e;
 }
+
+// event callback when layouts/visibility are updated and elements might have moved around
+var layoutUpdateCallback = {
+    callbacks : [],
+    add : function (f) {
+        this.callbacks.push(f);
+    },
+    call : function() {
+        for (var i = 0, length = this.callbacks.length; i < length; i++)
+            this.callbacks[i]();
+    }
+}
+
+// Notification bar
+// ==============================
+// this control displays a single line message at the top of the page, like StackOverflow does
+// see ui-samples for more details
+var notificationBar = {
+    OPACITY : 0.8,
+    DELAY : 3000,   // milliseconds to auto-close the notification
+    div : null,     // the main 'notification-bar' DIV
+    token : null,   // timer for cancelling auto-close
+
+    OK : {// standard option values for typical OK notification
+        icon: "accept.png",
+        backgroundColor: "#8ae234"
+    },
+    WARNING : {// likewise, for warning
+        icon: "yellow.png",
+        backgroundColor: "#fce94f"
+    },
+    ERROR : {// likewise, for error
+        icon: "red.png",
+        backgroundColor: "#ef2929",
+        sticky: true
+    },
+
+    init : function() {
+        if (this.div==null) {
+            this.div = document.createElement("div");
+            YAHOO.util.Dom.setStyle(this.div,"opacity",0);
+            this.div.id="notification-bar";
+            this.div.style.backgroundColor="#fff";
+            document.body.insertBefore(this.div, document.body.firstChild);
+
+            var self = this;
+            this.div.onclick = function() {
+                self.hide();
+            };
+        }
+    },
+    // cancel pending auto-hide timeout
+    clearTimeout : function() {
+        if (this.token)
+            window.clearTimeout(this.token);
+        this.token = null;
+    },
+    // hide the current notification bar, if it's displayed
+    hide : function () {
+        this.clearTimeout();
+        var self = this;
+        var out = new YAHOO.util.ColorAnim(this.div, {
+            opacity: { to:0 },
+            backgroundColor: {to:"#fff"}
+        }, 0.3, YAHOO.util.Easing.easeIn);
+        out.onComplete.subscribe(function() {
+            self.div.style.display = "none";
+        })
+        out.animate();
+    },
+    // show a notification bar
+    show : function (text,options) {
+        options = options || {}
+
+        this.init();
+        this.div.style.height = this.div.style.lineHeight = options.height || "40px";
+        this.div.style.display = "block";
+
+        if (options.icon)
+            text = "<img src='"+rootURL+"/images/24x24/"+options.icon+"'> "+text;
+        this.div.innerHTML = text;
+
+        new YAHOO.util.ColorAnim(this.div, {
+            opacity: { to:this.OPACITY },
+            backgroundColor : { to: options.backgroundColor || "#fff" }
+        }, 1, YAHOO.util.Easing.easeOut).animate();
+
+        this.clearTimeout();
+        var self = this;
+        if (!options.sticky)
+            this.token = window.setTimeout(function(){self.hide();},this.DELAY);
+    }
+};

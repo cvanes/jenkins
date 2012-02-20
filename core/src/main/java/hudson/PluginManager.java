@@ -28,6 +28,7 @@ import hudson.init.InitMilestone;
 import hudson.init.InitStrategy;
 import hudson.init.InitializerFinder;
 import hudson.model.AbstractModelObject;
+import hudson.model.Descriptor;
 import hudson.model.Failure;
 import hudson.model.UpdateCenter;
 import hudson.model.UpdateSite;
@@ -205,7 +206,7 @@ public abstract class PluginManager extends AbstractModelObject {
 
                                     /**
                                      * Inspects duplication. this happens when you run hpi:run on a bundled plugin,
-                                     * as well as putting numbered hpi files, like "cobertura-1.0.hpi" and "cobertura-1.1.hpi"
+                                     * as well as putting numbered jpi files, like "cobertura-1.0.jpi" and "cobertura-1.1.jpi"
                                      */
                                     private boolean isDuplicate(PluginWrapper p) {
                                         String shortName = p.getShortName();
@@ -381,24 +382,33 @@ public abstract class PluginManager extends AbstractModelObject {
     }
 
     /**
-     * If the war file has any "/WEB-INF/plugins/*.hpi", extract them into the plugin directory.
+     * If the war file has any "/WEB-INF/plugins/[*.jpi | *.hpi]", extract them into the plugin directory.
      *
      * @return
-     *      File names of the bundled plugins. Like {"ssh-slaves.hpi","subvesrion.hpi"}
+     *      File names of the bundled plugins. Like {"ssh-slaves.hpi","subvesrion.jpi"}
      * @throws Exception
      *      Any exception will be reported and halt the startup.
      */
     protected abstract Collection<String> loadBundledPlugins() throws Exception;
 
     /**
-     * Copies the bundled plugin from the given URL to the destination of the given file name (like 'abc.hpi'),
+     * Copies the bundled plugin from the given URL to the destination of the given file name (like 'abc.jpi'),
      * with a reasonable up-to-date check. A convenience method to be used by the {@link #loadBundledPlugins()}.
      */
     protected void copyBundledPlugin(URL src, String fileName) throws IOException {
+        fileName = fileName.replace(".hpi",".jpi"); // normalize fileNames to have the correct suffix
+        String legacyName = fileName.replace(".jpi",".hpi");
         long lastModified = src.openConnection().getLastModified();
         File file = new File(rootDir, fileName);
         File pinFile = new File(rootDir, fileName+".pinned");
 
+        {// normalization first
+            File legacyFile = new File(rootDir,legacyName);
+            if (legacyFile.exists())    legacyFile.renameTo(file);
+            File legacyPinFile = new File(rootDir,legacyName+".pinned");
+            if (legacyPinFile.exists())    legacyPinFile.renameTo(pinFile);
+        }
+        
         // update file if:
         //  - no file exists today
         //  - bundled version and current version differs (by timestamp), and the file isn't pinned.
@@ -528,12 +538,16 @@ public abstract class PluginManager extends AbstractModelObject {
      * @since 1.402.
      */
     public PluginWrapper whichPlugin(Class c) {
+        PluginWrapper oneAndOnly = null;
         ClassLoader cl = c.getClassLoader();
         for (PluginWrapper p : activePlugins) {
-            if (p.classLoader==cl)
-                return p;
+            if (p.classLoader==cl) {
+                if (oneAndOnly!=null)
+                    return null;    // ambigious
+                oneAndOnly = p;
+            }
         }
-        return null;
+        return oneAndOnly;
     }
 
     /**
@@ -611,49 +625,21 @@ public abstract class PluginManager extends AbstractModelObject {
     }
 
 
-    public HttpResponse doProxyConfigure(
-            @QueryParameter("proxy.server") String server,
-            @QueryParameter("proxy.port") String port,
-            @QueryParameter("proxy.userName") String userName,
-            @QueryParameter("proxy.password") String password) throws IOException {
-        Jenkins hudson = Jenkins.getInstance();
-        hudson.checkPermission(Jenkins.ADMINISTER);
+    public HttpResponse doProxyConfigure(StaplerRequest req) throws IOException, ServletException {
+        Jenkins jenkins = Jenkins.getInstance();
+        jenkins.checkPermission(Jenkins.ADMINISTER);
 
-        server = Util.fixEmptyAndTrim(server);
-        if(server==null) {
-            hudson.proxy = null;
+        ProxyConfiguration pc = req.bindJSON(ProxyConfiguration.class, req.getSubmittedForm());
+        if (pc.name==null) {
+            jenkins.proxy = null;
             ProxyConfiguration.getXmlFile().delete();
-        } else try {
-            int proxyPort = Integer.parseInt(Util.fixNull(port));
-            if (proxyPort < 0 || proxyPort > 65535) {
-               throw new Failure(Messages.PluginManager_PortNotInRange(0, 65535)); 
-            }
-            hudson.proxy = new ProxyConfiguration(server, proxyPort,
-                    Util.fixEmptyAndTrim(userName),Util.fixEmptyAndTrim(password));
-            hudson.proxy.save();
-        } catch (NumberFormatException nfe) {
-            throw new Failure(Messages.PluginManager_PortNotANumber());
+        } else {
+            jenkins.proxy = pc;
+            jenkins.proxy.save();
         }
         return new HttpRedirect("advanced");
     }
     
-    public FormValidation doCheckProxyPort(@QueryParameter String value) {
-        value = Util.fixEmptyAndTrim(value);
-        if (value == null) {
-            return FormValidation.ok();
-        }
-        int port;
-        try {
-            port = Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            return FormValidation.error(Messages.PluginManager_PortNotANumber());
-        }
-        if (port < 0 || port > 65535) {
-            return FormValidation.error(Messages.PluginManager_PortNotInRange(0, 65535));
-        }
-        return FormValidation.ok();
-    }
-
     /**
      * Uploads a plugin.
      */
@@ -666,16 +652,21 @@ public abstract class PluginManager extends AbstractModelObject {
             // Parse the request
             FileItem fileItem = (FileItem) upload.parseRequest(req).get(0);
             String fileName = Util.getFileName(fileItem.getName());
-            if("".equals(fileName))
+            if("".equals(fileName)){
                 return new HttpRedirect("advanced");
-            if(!fileName.endsWith(".hpi"))
+            }
+            // we allow the upload of the new jpi's and the legacy hpi's  
+            if(!fileName.endsWith(".jpi") && !fileName.endsWith(".hpi")){ 
                 throw new Failure(hudson.model.Messages.Hudson_NotAPlugin(fileName));
-            fileItem.write(new File(rootDir, fileName));
+            }
+            final String baseName = FilenameUtils.getBaseName(fileName);
+            fileItem.write(new File(rootDir, baseName + ".jpi")); // rename all new plugins to *.jpi
             fileItem.delete();
 
-            PluginWrapper existing = getPlugin(FilenameUtils.getBaseName(fileName));
-            if (existing!=null && existing.isBundled)
+            PluginWrapper existing = getPlugin(baseName);
+            if (existing!=null && existing.isBundled){
                 existing.doPin();
+            }
 
             pluginUploaded = true;
 
@@ -685,6 +676,10 @@ public abstract class PluginManager extends AbstractModelObject {
         } catch (Exception e) {// grrr. fileItem.write throws this
             throw new ServletException(e);
         }
+    }
+
+    public Descriptor<ProxyConfiguration> getProxyDescriptor() {
+        return Jenkins.getInstance().getDescriptor(ProxyConfiguration.class);
     }
 
     /**

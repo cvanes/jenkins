@@ -76,15 +76,17 @@ public class InstallPluginCommand extends CLICommand {
 
         for (String source : sources) {
             // is this a file?
-            FilePath f = new FilePath(channel, source);
-            if (f.exists()) {
-                stdout.println(Messages.InstallPluginCommand_InstallingPluginFromLocalFile(f));
-                if (name==null)
-                    name = f.getBaseName();
-                f.copyTo(getTargetFilePath());
-                if (dynamicLoad)
-                    pm.dynamicLoad(getTargetFile());
-                continue;
+            if (channel!=null) {
+                FilePath f = new FilePath(channel, source);
+                if (f.exists()) {
+                    stdout.println(Messages.InstallPluginCommand_InstallingPluginFromLocalFile(f));
+                    if (name==null)
+                        name = f.getBaseName();
+                    f.copyTo(getTargetFilePath());
+                    if (dynamicLoad)
+                        pm.dynamicLoad(getTargetFile());
+                    continue;
+                }
             }
 
             // is this an URL?
@@ -93,8 +95,8 @@ public class InstallPluginCommand extends CLICommand {
                 stdout.println(Messages.InstallPluginCommand_InstallingPluginFromUrl(u));
                 if (name==null) {
                     name = u.getPath();
-                    name = name.substring(name.indexOf('/')+1);
-                    name = name.substring(name.indexOf('\\')+1);
+                    name = name.substring(name.lastIndexOf('/')+1);
+                    name = name.substring(name.lastIndexOf('\\')+1);
                     int idx = name.lastIndexOf('.');
                     if (idx>0)  name = name.substring(0,idx);
                 }
@@ -148,6 +150,6 @@ public class InstallPluginCommand extends CLICommand {
     }
 
     private File getTargetFile() {
-        return new File(Jenkins.getInstance().getPluginManager().rootDir,name+".hpi");
+        return new File(Jenkins.getInstance().getPluginManager().rootDir,name+".jpi");
     }
 }

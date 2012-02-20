@@ -29,7 +29,7 @@ THE SOFTWARE.
   <parent>
     <groupId>org.jenkins-ci.main</groupId>
     <artifactId>pom</artifactId>
-    <version>1.443-SNAPSHOT</version>
+    <version>1.453-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
@@ -42,7 +42,7 @@ THE SOFTWARE.
 
   <properties>
     <staplerFork>true</staplerFork>
-    <stapler.version>1.176</stapler.version>
+    <stapler.version>1.178</stapler.version>
   </properties>
 
   <dependencies>
@@ -82,6 +82,7 @@ THE SOFTWARE.
       <groupId>org.jenkins-ci</groupId>
       <artifactId>core-annotation-processors</artifactId>
       <version>1.0</version>
+      <scope>provided</scope>
       <optional>true</optional>
     </dependency>
 
@@ -125,6 +126,10 @@ THE SOFTWARE.
         </exclusion>
         <exclusion>
           <groupId>commons-jexl</groupId>
+          <artifactId>commons-jexl</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.jvnet.hudson</groupId>
           <artifactId>commons-jexl</artifactId>
         </exclusion>
         <exclusion>
@@ -349,9 +354,9 @@ THE SOFTWARE.
       </exclusions>
     </dependency>
     <dependency>
-      <groupId>org.jvnet.hudson</groupId>
+      <groupId>org.jenkins-ci</groupId>
       <artifactId>commons-jexl</artifactId>
-      <version>1.1-hudson-20090508</version>
+      <version>1.1-jenkins-20111212</version>
     </dependency>
     <dependency>
       <groupId>org.acegisecurity</groupId>
@@ -371,7 +376,7 @@ THE SOFTWARE.
     <dependency>
       <groupId>org.codehaus.groovy</groupId>
       <artifactId>groovy-all</artifactId>
-      <version>1.8.3</version>
+      <version>1.8.5</version>
     </dependency>
     <dependency><!-- groovy shell uses this but it doesn't declare this dependency -->
       <groupId>jline</groupId>
@@ -456,7 +461,7 @@ THE SOFTWARE.
     <dependency>
       <groupId>org.jenkins-ci</groupId>
       <artifactId>memory-monitor</artifactId>
-      <version>1.5</version>
+      <version>1.7</version>
     </dependency>
     <dependency><!-- StAX implementation. See HUDSON-2547. -->
       <groupId>org.codehaus.woodstox</groupId>
@@ -520,6 +525,7 @@ THE SOFTWARE.
       <groupId>org.kohsuke.metainf-services</groupId>
       <artifactId>metainf-services</artifactId>
       <version>1.1</version>
+      <scope>provided</scope>
       <optional>true</optional>
     </dependency>
     <dependency>

@@ -65,7 +65,7 @@ import org.apache.commons.jelly.Script;
 import org.apache.commons.jelly.XMLOutput;
 import org.apache.commons.jexl.parser.ASTSizeFunction;
 import org.apache.commons.jexl.util.Introspector;
-import org.jvnet.animal_sniffer.IgnoreJRERequirement;
+import org.codehaus.mojo.animal_sniffer.IgnoreJRERequirement;
 import org.jvnet.tiger_types.Types;
 import org.kohsuke.stapler.Ancestor;
 import org.kohsuke.stapler.Stapler;
@@ -1454,8 +1454,15 @@ public class Functions {
      * @return a URL string
      * @since 1.433
      */
-    public String getUserAvatar(User user, String avatarSize) {
+    public static String getAvatar(User user, String avatarSize) {
         return UserAvatarResolver.resolve(user, avatarSize);
     }
-    
+
+    /**
+     * @deprecated as of 1.451
+     *      Use {@link #getAvatar}
+     */
+    public String getUserAvatar(User user, String avatarSize) {
+        return getAvatar(user,avatarSize);
+    }
 }

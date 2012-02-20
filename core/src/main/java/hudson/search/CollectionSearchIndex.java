@@ -26,6 +26,7 @@ package hudson.search;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import hudson.model.User;
 
 /**
  * {@link SearchIndex} built on a {@link Map}.
@@ -51,10 +52,16 @@ public abstract class CollectionSearchIndex<SMT extends SearchableModelObject> i
     }
 
     public void suggest(String token, List<SearchItem> result) {
-        Collection<SMT> items = all();
+         Collection<SMT> items = all();
+        if(UserSearchProperty.isCaseSensitive()){ 
+          token = token.toLowerCase();
+        }
         if(items==null)     return;
         for (SMT o : items) {
-            if(o!=null && getName(o).contains(token))
+            String name = getName(o);
+            if(UserSearchProperty.isCaseSensitive())
+                name=name.toLowerCase();
+            if(o!=null && name.contains(token))
                 result.add(o);
         }
     }
