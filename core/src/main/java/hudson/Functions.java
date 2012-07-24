@@ -58,6 +58,7 @@ import hudson.views.ViewsTabBar;
 import hudson.widgets.RenderOnDemandClosure;
 import jenkins.model.GlobalConfiguration;
 import jenkins.model.Jenkins;
+import jenkins.model.ModelObjectWithContextMenu;
 import org.acegisecurity.providers.anonymous.AnonymousAuthenticationToken;
 import org.apache.commons.jelly.JellyContext;
 import org.apache.commons.jelly.JellyTagException;
@@ -93,6 +94,7 @@ import java.lang.reflect.ParameterizedType;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLDecoder;
+import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -145,12 +147,26 @@ public class Functions {
         return o instanceof ModelObject;
     }
 
+    public static boolean isModelWithContextMenu(Object o) {
+        return o instanceof ModelObjectWithContextMenu;
+    }
+
     public static String xsDate(Calendar cal) {
         return Util.XS_DATETIME_FORMATTER.format(cal.getTime());
     }
 
     public static String rfc822Date(Calendar cal) {
         return Util.RFC822_DATETIME_FORMATTER.format(cal.getTime());
+    }
+    
+    public static void initPageVariables(JellyContext context) {
+        String rootURL = Stapler.getCurrentRequest().getContextPath();
+        Functions h = new Functions();
+
+        context.setVariable("rootURL", rootURL);
+        context.setVariable("h", h);
+        context.setVariable("resURL",rootURL+getResourcePath());
+        context.setVariable("imagesURL",rootURL+getResourcePath()+"/images");
     }
 
     /**
@@ -792,7 +808,8 @@ public class Functions {
      */
     public static String getIconFilePath(Action a) {
         String name = a.getIconFileName();
-        if(name.startsWith("/"))
+        if (name==null)     return null;
+        if (name.startsWith("/"))
             return name.substring(1);
         else
             return "images/24x24/"+name;
@@ -1163,6 +1180,24 @@ public class Functions {
     }
 
     /**
+     * Combine path components via '/' while handling leading/trailing '/' to avoid duplicates.
+     */
+    public static String joinPath(String... components) {
+        StringBuilder buf = new StringBuilder();
+        for (String s : components) {
+            if (s.length()==0)  continue;
+
+            if (buf.length()>0) {
+                if (buf.charAt(buf.length()-1)!='/')
+                    buf.append('/');
+                if (s.charAt(0)=='/')   s=s.substring(1);
+            }
+            buf.append(s);
+        }
+        return buf.toString();
+    }
+
+    /**
      * Computes the hyperlink to actions, to handle the situation when the {@link Action#getUrlName()}
      * returns absolute URL.
      */
@@ -1172,10 +1207,10 @@ public class Functions {
         if(SCHEME.matcher(urlName).find())
             return urlName; // absolute URL
         if(urlName.startsWith("/"))
-            return Stapler.getCurrentRequest().getContextPath()+urlName;
+            return joinPath(Stapler.getCurrentRequest().getContextPath(),urlName);
         else
             // relative URL name
-            return Stapler.getCurrentRequest().getContextPath()+'/'+itUrl+urlName;
+            return joinPath(Stapler.getCurrentRequest().getContextPath()+'/'+itUrl,urlName);
     }
 
     /**
@@ -1464,5 +1499,31 @@ public class Functions {
      */
     public String getUserAvatar(User user, String avatarSize) {
         return getAvatar(user,avatarSize);
+    }
+    
+    
+    /**
+     * Returns human readable information about file size
+     * 
+     * @param file size in bytes
+     * @return file size in appropriate unit
+     */
+    public static String humanReadableByteSize(long size){
+        String measure = "B";
+        Double number = new Double(size);
+        if(number>=1024){
+            number = number/1024;
+            measure = "KB";
+            if(number>=1024){
+                number = number/1024;
+                measure = "MB";
+                if(number>=1024){
+                    number=number/1024;
+                    measure = "GB";
+                }
+            }
+        }
+        DecimalFormat format = new DecimalFormat("##.00");
+        return format.format(number) + " " + measure;
     }
 }

@@ -31,6 +31,9 @@ import com.gargoylesoftware.htmlunit.TextPage;
 import hudson.util.TextFile;
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
+
+import jenkins.model.ProjectNamingStrategy;
+
 import org.jvnet.hudson.test.Bug;
 import org.jvnet.hudson.test.HudsonTestCase;
 import org.jvnet.hudson.test.recipes.LocalData;
@@ -181,7 +184,7 @@ public class JobTest extends HudsonTestCase {
 
     @LocalData
     public void testConfigDotXmlPermission() throws Exception {
-        hudson.setCrumbIssuer(null);
+        jenkins.setCrumbIssuer(null);
         WebClient wc = new WebClient();
         boolean saveEnabled = Item.EXTENDED_READ.getEnabled();
         Item.EXTENDED_READ.setEnabled(true);
@@ -222,7 +225,7 @@ public class JobTest extends HudsonTestCase {
     public void testGetArtifactsUpTo() throws Exception {
         // There was a bug where intermediate directories were counted,
         // so too few artifacts were returned.
-        Run r = hudson.getItemByFullName("testJob", Job.class).getLastCompletedBuild();
+        Run r = jenkins.getItemByFullName("testJob", Job.class).getLastCompletedBuild();
         assertEquals(3, r.getArtifacts().size());
         assertEquals(3, r.getArtifactsUpTo(3).size());
         assertEquals(2, r.getArtifactsUpTo(2).size());
@@ -238,5 +241,21 @@ public class JobTest extends HudsonTestCase {
         assertEquals("description", ((TextPage) wc.goTo("job/project/description", "text/plain")).getContent());
         project.setDescription(null);
         assertEquals("", ((TextPage) wc.goTo("job/project/description", "text/plain")).getContent());
+    }
+    
+    public void testProjectNamingStrategy() throws Exception {
+        jenkins.setProjectNamingStrategy(new ProjectNamingStrategy.PatternProjectNamingStrategy("DUMMY.*", false));
+        final FreeStyleProject p = createFreeStyleProject("DUMMY_project");
+        assertNotNull("no project created", p);
+        try {
+            createFreeStyleProject("project");
+            fail("should not get here, the project name is not allowed, therefore the creation must fail!");
+        } catch (Failure e) {
+            // OK, expected
+        }finally{
+            // set it back to the default naming strategy, otherwise all other tests would fail to create jobs!
+            jenkins.setProjectNamingStrategy(ProjectNamingStrategy.DEFAULT_NAMING_STRATEGY);
+        }
+        createFreeStyleProject("project");
     }
 }

@@ -46,8 +46,9 @@ import hudson.util.IOException2;
 import hudson.util.HeadBufferingStream;
 import hudson.util.FormValidation;
 import hudson.util.IOUtils;
+
+import static hudson.Util.*;
 import static hudson.util.jna.GNUCLibrary.LIBC;
-import static hudson.Util.fixEmpty;
 import static hudson.FilePath.TarCompression.GZIP;
 import hudson.org.apache.tools.tar.TarInputStream;
 import hudson.util.io.Archiver;
@@ -75,6 +76,7 @@ import java.io.OutputStream;
 import java.io.Serializable;
 import java.io.Writer;
 import java.io.OutputStreamWriter;
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
@@ -211,17 +213,24 @@ public final class FilePath implements Serializable {
      */
     public FilePath(FilePath base, String rel) {
         this.channel = base.channel;
-        if(isAbsolute(rel)) {
-            // absolute
-            this.remote = normalize(rel);
-        } else 
+        this.remote = normalize(resolvePathIfRelative(base, rel));
+    }
+
+    private String resolvePathIfRelative(FilePath base, String rel) {
+        if(isAbsolute(rel)) return rel;
         if(base.isUnix()) {
-            this.remote = normalize(base.remote+'/'+rel);
+            // shouldn't need this replace, but better safe than sorry
+            return base.remote+'/'+rel.replace('\\','/');
         } else {
-            this.remote = normalize(base.remote+'\\'+rel);
+            // need this replace, see Slave.getWorkspaceFor and AbstractItem.getFullName, nested jobs on Windows
+            // slaves will always have a rel containing at least one '/' character. JENKINS-13649
+            return base.remote+'\\'+rel.replace('/','\\');
         }
     }
 
+    /**
+     * Is the given path name an absolute path?
+     */
     private static boolean isAbsolute(String rel) {
         return rel.startsWith("/") || DRIVE_PATTERN.matcher(rel).matches();
     }
@@ -331,6 +340,15 @@ public final class FilePath implements Serializable {
         zip(os,(FileFilter)null);
     }
 
+    public void zip(FilePath dst) throws IOException, InterruptedException {
+        OutputStream os = dst.write();
+        try {
+            zip(os);
+        } finally {
+            os.close();
+        }
+    }
+    
     /**
      * Creates a zip file from this directory by using the specified filter,
      * and sends the result to the given output stream.
@@ -404,11 +422,11 @@ public final class FilePath implements Serializable {
         });
     }
 
-    private int archive(final ArchiverFactory factory, OutputStream os, final FileFilter filter) throws IOException, InterruptedException {
+    public int archive(final ArchiverFactory factory, OutputStream os, final FileFilter filter) throws IOException, InterruptedException {
         return archive(factory,os,new DirScanner.Filter(filter));
     }
 
-    private int archive(final ArchiverFactory factory, OutputStream os, final String glob) throws IOException, InterruptedException {
+    public int archive(final ArchiverFactory factory, OutputStream os, final String glob) throws IOException, InterruptedException {
         return archive(factory,os,new DirScanner.Glob(glob,null));
     }
 
@@ -527,6 +545,39 @@ public final class FilePath implements Serializable {
                 return f.getAbsolutePath();
             }
         }));
+    }
+
+    /**
+     * Creates a symlink to the specified target.
+     *
+     * @param target
+     *      The file that the symlink should point to.
+     * @param listener
+     *      If symlink creation requires a help of an external process, the error will be reported here.
+     * @since 1.456
+     */
+    public void symlinkTo(final String target, final TaskListener listener) throws IOException, InterruptedException {
+        act(new FileCallable<Void>() {
+            public Void invoke(File f, VirtualChannel channel) throws IOException, InterruptedException {
+                Util.createSymlink(f.getParentFile(),target,f.getName(),listener);
+                return null;
+            }
+        });
+    }
+    
+    /**
+     * Resolves symlink, if the given file is a symlink. Otherwise return null.
+     * <p>
+     * If the resolution fails, report an error.
+     *
+     * @since 1.456
+     */
+    public String readLink() throws IOException, InterruptedException {
+        return act(new FileCallable<String>() {
+            public String invoke(File f, VirtualChannel channel) throws IOException, InterruptedException {
+                return Util.resolveSymlink(f);
+            }
+        });
     }
 
     @Override
@@ -734,8 +785,11 @@ public final class FilePath implements Serializable {
             try {
                 IOUtils.copy(i,o);
             } finally {
-                o.close();
-                i.close();
+                try {
+                    o.close();
+                } finally {
+                    i.close();
+                }
             }
         }
     }
@@ -919,11 +973,11 @@ public final class FilePath implements Serializable {
 
     /**
      * The same as {@link FilePath#FilePath(FilePath,String)} but more OO.
-     * @param rel a relative or absolute path
+     * @param relOrAbsolute a relative or absolute path
      * @return a file on the same channel
      */
-    public FilePath child(String rel) {
-        return new FilePath(this,rel);
+    public FilePath child(String relOrAbsolute) {
+        return new FilePath(this,relOrAbsolute);
     }
 
     /**
@@ -1317,9 +1371,24 @@ public final class FilePath implements Serializable {
      * @since 1.407
      */
     public FilePath[] list(final String includes, final String excludes) throws IOException, InterruptedException {
+        return list(includes, excludes, true);
+    }
+
+    /**
+     * List up files in this directory that matches the given Ant-style filter.
+     *
+     * @param includes
+     * @param excludes
+     *      See {@link FileSet} for the syntax. String like "foo/*.zip" or "foo/*&#42;/*.xml"
+     * @param defaultExcludes whether to use the ant default excludes
+     * @return
+     *      can be empty but always non-null.
+     * @since 1.465
+     */
+    public FilePath[] list(final String includes, final String excludes, final boolean defaultExcludes) throws IOException, InterruptedException {
         return act(new FileCallable<FilePath[]>() {
             public FilePath[] invoke(File f, VirtualChannel channel) throws IOException {
-                String[] files = glob(f,includes,excludes);
+                String[] files = glob(f, includes, excludes, defaultExcludes);
 
                 FilePath[] r = new FilePath[files.length];
                 for( int i=0; i<r.length; i++ )
@@ -1336,10 +1405,11 @@ public final class FilePath implements Serializable {
      * @return
      *      A set of relative file names from the base directory.
      */
-    private static String[] glob(File dir, String includes, String excludes) throws IOException {
+    private static String[] glob(File dir, String includes, String excludes, boolean defaultExcludes) throws IOException {
         if(isAbsolute(includes))
             throw new IOException("Expecting Ant GLOB pattern, but saw '"+includes+"'. See http://ant.apache.org/manual/Types/fileset.html for syntax");
         FileSet fs = Util.createFileSet(dir,includes,excludes);
+        fs.setDefaultexcludes(defaultExcludes);
         DirectoryScanner ds = fs.getDirectoryScanner(new Project());
         String[] files = ds.getIncludedFiles();
         return files;
@@ -1386,6 +1456,16 @@ public final class FilePath implements Serializable {
      * Writes to this file.
      * If this file already exists, it will be overwritten.
      * If the directory doesn't exist, it will be created.
+     *
+     * <P>
+     * I/O operation to remote {@link FilePath} happens asynchronously, meaning write operations to the returned
+     * {@link OutputStream} will return without receiving a confirmation from the remote that the write happened.
+     * I/O operations also happens asynchronously from the {@link Channel#call(Callable)} operations, so if
+     * you write to a remote file and then execute {@link Channel#call(Callable)} and try to access the newly copied
+     * file, it might not be fully written yet.
+     *
+     * <p>
+     *
      */
     public OutputStream write() throws IOException, InterruptedException {
         if(channel==null) {
@@ -1526,10 +1606,16 @@ public final class FilePath implements Serializable {
             }
         });
 
-        // make sure the write fully happens before we return.
+        // make sure the writes fully got delivered to 'os' before we return.
+        // this is needed because I/O operation is asynchronous
         syncIO();
     }
 
+    /**
+     * With fix to JENKINS-11251 (remoting 2.15), this is no longer necessary.
+     * But I'm keeping it for a while so that users who manually deploy slave.jar has time to deploy new version
+     * before this goes away.
+     */
     private void syncIO() throws InterruptedException {
         try {
             if (channel!=null)
@@ -1756,14 +1842,25 @@ public final class FilePath implements Serializable {
                     File parent = f.getParentFile();
                     if (parent != null) parent.mkdirs();
 
-                    IOUtils.copy(t,f);
-                    f.setLastModified(te.getModTime().getTime());
-                    int mode = te.getMode()&0777;
-                    if(mode!=0 && !Functions.isWindows()) // be defensive
-                        _chmod(f,mode);
+                    byte linkFlag = (Byte) LINKFLAG_FIELD.get(te);
+                    if (linkFlag==TarEntry.LF_SYMLINK) {
+                        new FilePath(f).symlinkTo(te.getLinkName(), TaskListener.NULL);
+                    } else {
+                        IOUtils.copy(t,f);
+
+                        f.setLastModified(te.getModTime().getTime());
+                        int mode = te.getMode()&0777;
+                        if(mode!=0 && !Functions.isWindows()) // be defensive
+                            _chmod(f,mode);
+                    }
                 }
             }
         } catch(IOException e) {
+            throw new IOException2("Failed to extract "+name,e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt(); // process this later
+            throw new IOException2("Failed to extract "+name,e);
+        } catch (IllegalAccessException e) {
             throw new IOException2("Failed to extract "+name,e);
         } finally {
             t.close();
@@ -2124,4 +2221,18 @@ public final class FilePath implements Serializable {
             return o1.length()-o2.length();
         }
     };
+
+    private static final Field LINKFLAG_FIELD = getTarEntryLinkFlagField();
+
+    private static Field getTarEntryLinkFlagField() {
+        try {
+            Field f = TarEntry.class.getDeclaredField("linkFlag");
+            f.setAccessible(true);
+            return f;
+        } catch (SecurityException e) {
+            throw new AssertionError(e);
+        } catch (NoSuchFieldException e) {
+            throw new AssertionError(e);
+        }
+    }
 }

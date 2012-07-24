@@ -35,6 +35,7 @@ import hudson.model.Descriptor.FormException;
 import hudson.model.Fingerprint.Range;
 import hudson.model.Fingerprint.RangeSet;
 import hudson.model.PermalinkProjectAction.Permalink;
+import hudson.model.listeners.ItemListener;
 import hudson.search.QuickSilver;
 import hudson.search.SearchIndex;
 import hudson.search.SearchIndexBuilder;
@@ -50,8 +51,6 @@ import hudson.util.DataSetBuilder;
 import hudson.util.DescribableList;
 import hudson.util.FormApply;
 import hudson.util.Graph;
-import hudson.util.HttpResponses;
-import hudson.util.IOException2;
 import hudson.util.RunList;
 import hudson.util.ShiftedCategoryAxis;
 import hudson.util.StackedAreaRenderer2;
@@ -60,6 +59,8 @@ import hudson.widgets.HistoryWidget;
 import hudson.widgets.HistoryWidget.Adapter;
 import hudson.widgets.Widget;
 import jenkins.model.Jenkins;
+import jenkins.model.ProjectNamingStrategy;
+import jenkins.util.io.OnMaster;
 import net.sf.json.JSONException;
 import net.sf.json.JSONObject;
 import org.jfree.chart.ChartFactory;
@@ -79,6 +80,7 @@ import org.kohsuke.stapler.StaplerOverridable;
 import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.StaplerResponse;
 import org.kohsuke.stapler.export.Exported;
+import org.kohsuke.stapler.interceptor.RequirePOST;
 
 import javax.servlet.ServletException;
 import java.awt.*;
@@ -101,7 +103,7 @@ import static javax.servlet.http.HttpServletResponse.*;
  * @author Kohsuke Kawaguchi
  */
 public abstract class Job<JobT extends Job<JobT, RunT>, RunT extends Run<JobT, RunT>>
-        extends AbstractItem implements ExtensionPoint, StaplerOverridable {
+        extends AbstractItem implements ExtensionPoint, StaplerOverridable, OnMaster {
 
     /**
      * Next build number. Kept in a separate file because this is the only
@@ -252,6 +254,14 @@ public abstract class Job<JobT extends Job<JobT, RunT>, RunT extends Run<JobT, R
         RunT b = getLastBuild();
         return b!=null && b.isBuilding();
     }
+    
+    /**
+     * Returns true if the log file is still being updated.
+     */
+    public boolean isLogUpdated() {
+        RunT b = getLastBuild();
+        return b!=null && b.isLogUpdated();
+    }    
 
     @Override
     public String getPronoun() {
@@ -951,10 +961,10 @@ public abstract class Job<JobT extends Job<JobT, RunT>, RunT extends Run<JobT, R
     /**
      * Accepts submission from the configuration page.
      */
+    @RequirePOST
     public synchronized void doConfigSubmit(StaplerRequest req,
             StaplerResponse rsp) throws IOException, ServletException, FormException {
         checkPermission(CONFIGURE);
-        requirePOST();
 
         description = req.getParameter("description");
 
@@ -981,13 +991,19 @@ public abstract class Job<JobT extends Job<JobT, RunT>, RunT extends Run<JobT, R
             submit(req, rsp);
 
             save();
+            ItemListener.fireOnUpdated(this);
 
             String newName = req.getParameter("name");
+            final ProjectNamingStrategy namingStrategy = Jenkins.getInstance().getProjectNamingStrategy();
             if (newName != null && !newName.equals(name)) {
                 // check this error early to avoid HTTP response splitting.
                 Jenkins.checkGoodName(newName);
+                namingStrategy.checkName(newName);
                 rsp.sendRedirect("rename?newName=" + URLEncoder.encode(newName, "UTF-8"));
             } else {
+                if(namingStrategy.isForceExistingJobs()){
+                    namingStrategy.checkName(name);
+                }
                 FormApply.success(".").generateResponse(req, rsp, null);
             }
         } catch (JSONException e) {
@@ -1187,10 +1203,10 @@ public abstract class Job<JobT extends Job<JobT, RunT>, RunT extends Run<JobT, R
     /**
      * Renames this job.
      */
+    @RequirePOST
     public/* not synchronized. see renameTo() */void doDoRename(
             StaplerRequest req, StaplerResponse rsp) throws IOException,
             ServletException {
-        requirePOST();
         // rename is essentially delete followed by a create
         checkPermission(CREATE);
         checkPermission(DELETE);
@@ -1208,8 +1224,7 @@ public abstract class Job<JobT extends Job<JobT, RunT>, RunT extends Run<JobT, R
         // send to the new job page
         // note we can't use getUrl() because that would pick up old name in the
         // Ancestor.getUrl()
-        rsp.sendRedirect2(req.getContextPath() + '/' + getParent().getUrl()
-                + getShortUrl());
+        rsp.sendRedirect2("../" + newName);
     }
 
     public void doRssAll(StaplerRequest req, StaplerResponse rsp)

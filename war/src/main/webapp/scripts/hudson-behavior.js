@@ -36,6 +36,50 @@ function object(o) {
     return new F();
 }
 
+/**
+ * A function that returns false if the page is known to be invisible.
+ */
+var isPageVisible = (function(){
+    // @see https://developer.mozilla.org/en/DOM/Using_the_Page_Visibility_API
+    // Set the name of the hidden property and the change event for visibility
+    var hidden, visibilityChange;
+    if (typeof document.hidden !== "undefined") {
+        hidden = "hidden";
+        visibilityChange = "visibilitychange";
+    } else if (typeof document.mozHidden !== "undefined") {
+        hidden = "mozHidden";
+        visibilityChange = "mozvisibilitychange";
+    } else if (typeof document.msHidden !== "undefined") {
+        hidden = "msHidden";
+        visibilityChange = "msvisibilitychange";
+    } else if (typeof document.webkitHidden !== "undefined") {
+        hidden = "webkitHidden";
+        visibilityChange = "webkitvisibilitychange";
+    }
+
+    // By default, visibility set to true
+    var pageIsVisible = true;
+
+    // If the page is hidden, prevent any polling
+    // if the page is shown, restore pollings
+    function onVisibilityChange() {
+        pageIsVisible = !document[hidden];
+    }
+
+    // Warn if the browser doesn't support addEventListener or the Page Visibility API
+    if (typeof document.addEventListener !== "undefined" && typeof hidden !== "undefined") {
+        // Init the value to the real state of the page
+        pageIsVisible = !document[hidden];
+
+        // Handle page visibility change
+        document.addEventListener(visibilityChange, onVisibilityChange, false);
+    }
+
+    return function() {
+        return pageIsVisible;
+    }
+})();
+
 // id generator
 var iota = 0;
 
@@ -144,6 +188,9 @@ var FormChecker = {
  * @param {string} name
  *      Name of the control to find. Can include "../../" etc in the prefix.
  *      See @RelativePath.
+ *
+ *      We assume that the name is normalized and doesn't contain any redundant component.
+ *      That is, ".." can only appear as prefix, and "foo/../bar" is not OK (because it can be reduced to "bar")
  */
 function findNearBy(e,name) {
     while (name.startsWith("../")) {
@@ -151,25 +198,38 @@ function findNearBy(e,name) {
         e = findFormParent(e,null,true);
     }
 
+    // name="foo/bar/zot"  -> prefixes=["bar","foo"] & name="zot"
+    var prefixes = name.split("/");
+    name = prefixes.pop();
+    prefixes = prefixes.reverse();
+
     // does 'e' itself match the criteria?
     // as some plugins use the field name as a parameter value, instead of 'value'
     var p = findFormItem(e,name,function(e,filter) {
-        if (filter(e))    return e;
-        return null;
+        return filter(e) ? e : null;
     });
-    if (p!=null)    return p;
+    if (p!=null && prefixes.length==0)    return p;
 
     var owner = findFormParent(e,null,true);
 
-    p = findPreviousFormItem(e,name);
-    if (p!=null && findFormParent(p,null,true)==owner)
-        return p;
+    function locate(iterator,e) {// keep finding elements until we find the good match
+        while (true) {
+            e = iterator(e,name);
+            if (e==null)    return null;
 
-    var n = findNextFormItem(e,name);
-    if (n!=null && findFormParent(n,null,true)==owner)
-        return n;
+            // make sure this candidate element 'e' is in the right point in the hierarchy
+            var p = e;
+            for (var i=0; i<prefixes.length; i++) {
+                p = findFormParent(p,null,true);
+                if (p.getAttribute("name")!=prefixes[i])
+                    return null;
+            }
+            if (findFormParent(p,null,true)==owner)
+                return e;
+        }
+    }
 
-    return null; // not found
+    return locate(findPreviousFormItem,e) || locate(findNextFormItem,e);
 }
 
 function controlValue(e) {
@@ -240,7 +300,7 @@ function findFollowingTR(input, className) {
 
     // then next TR that matches the CSS
     do {
-        tr = tr.nextSibling;
+        tr = $(tr).next();
     } while (tr != null && (tr.tagName != "TR" || !Element.hasClassName(tr,className)));
 
     return tr;
@@ -501,80 +561,10 @@ function sequencer(fs) {
     return next();
 }
 
-var hudsonRules = {
+var jenkinsRules = {
     "BODY" : function() {
         tooltip = new YAHOO.widget.Tooltip("tt", {context:[], zindex:999});
     },
-
-// do the ones that extract innerHTML so that they can get their original HTML before
-// other behavior rules change them (like YUI buttons.)
-
-    "DIV.hetero-list-container" : function(e) {
-        if(isInsideRemovable(e))    return;
-
-        // components for the add button
-        var menu = document.createElement("SELECT");
-        var btns = findElementsBySelector(e,"INPUT.hetero-list-add"),
-            btn = btns[btns.length-1]; // In case nested content also uses hetero-list
-        YAHOO.util.Dom.insertAfter(menu,btn);
-
-        var prototypes = e.lastChild;
-        while(!Element.hasClassName(prototypes,"prototypes"))
-            prototypes = prototypes.previousSibling;
-        var insertionPoint = prototypes.previousSibling;    // this is where the new item is inserted.
-
-        // extract templates
-        var templates = []; var i=0;
-        for(var n=prototypes.firstChild;n!=null;n=n.nextSibling,i++) {
-            var name = n.getAttribute("name");
-            var tooltip = n.getAttribute("tooltip");
-            var descriptorId = n.getAttribute("descriptorId");
-            menu.options[i] = new Option(n.getAttribute("title"),""+i);
-            templates.push({html:n.innerHTML, name:name, tooltip:tooltip,descriptorId:descriptorId});
-        }
-        Element.remove(prototypes);
-
-        var withDragDrop = initContainerDD(e);
-
-        var menuButton = new YAHOO.widget.Button(btn, { type: "menu", menu: menu });
-        menuButton.getMenu().clickEvent.subscribe(function(type,args,value) {
-            var t = templates[parseInt(args[1].value)]; // where this args[1] comes is a real mystery
-
-            var nc = document.createElement("div");
-            nc.className = "repeated-chunk";
-            nc.setAttribute("name",t.name);
-            nc.innerHTML = t.html;
-
-            renderOnDemand(findElementsBySelector(nc,"TR.config-page")[0],function() {
-                insertionPoint.parentNode.insertBefore(nc, insertionPoint);
-                if(withDragDrop)    prepareDD(nc);
-
-                Behaviour.applySubtree(nc,true);
-            },true);
-        });
-
-        menuButton.getMenu().renderEvent.subscribe(function(type,args,value) {
-            // hook up tooltip for menu items
-            var items = menuButton.getMenu().getItems();
-            for(i=0; i<items.length; i++) {
-                var t = templates[i].tooltip;
-                if(t!=null)
-                    applyTooltip(items[i].element,t);
-            }
-        });
-    },
-
-    "DIV.repeated-container" : function(e) {
-        if(isInsideRemovable(e))    return;
-
-        // compute the insertion point
-        var ip = e.lastChild;
-        while (!Element.hasClassName(ip, "repeatable-insertion-point"))
-            ip = ip.previousSibling;
-        // set up the logic
-        object(repeatableSupport).init(e, e.firstChild, ip);
-    },
-
 
     "TABLE.sortable" : function(e) {// sortable table
         ts_makeSortable(e);
@@ -588,96 +578,14 @@ var hudsonRules = {
         e = null; // avoid memory leak
     },
 
-    "INPUT.applyButton":function (e) {
-        var id = "iframe"+(iota++);
-
-        var responseDialog = new YAHOO.widget.Panel("wait"+(iota++), {
-            fixedcenter:true,
-            close:true,
-            draggable:true,
-            zindex:4,
-            modal:true,
-            visible:false
-        });
-
-        responseDialog.setHeader("Error");
-        responseDialog.setBody("<iframe id='"+id+"' name='"+id+"' style='height:100%; width:100%'></iframe>");
-        responseDialog.render(document.body);
-        var target = $(id); // iframe
-
-        function attachIframeOnload(target, f) {
-            if (target.attachEvent) {
-                target.attachEvent("onload", f);
-            } else {
-                target.onload = f;
-            }
-        }
-
-        var attached = false;
-        makeButton(e,function (e) {
-            var f = findAncestor(e.target, "FORM");
-
-            if (!attached) {
-                attached = true;
-                attachIframeOnload(target, function () {
-                    if (target.contentWindow && target.contentWindow.applyCompletionHandler) {
-                        // apply-aware server is expected to set this handler
-                        target.contentWindow.applyCompletionHandler(window);
-                    } else {
-                        // otherwise this is possibly an error from the server, so we need to render the whole content.
-                        var r = YAHOO.util.Dom.getClientRegion();
-                        responseDialog.cfg.setProperty("width",r.width*3/4+"px");
-                        responseDialog.cfg.setProperty("height",r.height*3/4+"px");
-                        responseDialog.center();
-                        responseDialog.show();
-                    }
-                });
-            }
-
-            f.target = target.id;
-            f.elements['core:apply'].value = "true";
-            try {
-                buildFormTree(f);
-                f.submit();
-            } finally {
-                f.elements['core:apply'].value = null;
-                f.target = null;
-            }
-        });
-    },
-
-    "INPUT.advancedButton" : function(e) {
-        makeButton(e,function(e) {
-            var link = e.target;
-            while(!Element.hasClassName(link,"advancedLink"))
-                link = link.parentNode;
-            link.style.display = "none"; // hide the button
-
-            var container = link.nextSibling.firstChild; // TABLE -> TBODY
-
-            var tr = link;
-            while (tr.tagName != "TR")
-                tr = tr.parentNode;
-
-            // move the contents of the advanced portion into the main table
-            var nameRef = tr.getAttribute("nameref");
-            while (container.lastChild != null) {
-                var row = container.lastChild;
-                if(nameRef!=null && row.getAttribute("nameref")==null)
-                    row.setAttribute("nameref",nameRef); // to handle inner rowSets, don't override existing values
-                tr.parentNode.insertBefore(row, tr.nextSibling);
-            }
-        });
-        e = null; // avoid memory leak
-    },
-
-    "INPUT.expandButton" : function(e) {
+    "INPUT.expand-button" : function(e) {
         makeButton(e,function(e) {
             var link = e.target;
             while(!Element.hasClassName(link,"advancedLink"))
                 link = link.parentNode;
             link.style.display = "none";
-            link.nextSibling.style.display="block";
+            $(link).next().style.display="block";
+            layoutUpdateCallback.call();
         });
         e = null; // avoid memory leak
     },
@@ -704,13 +612,13 @@ var hudsonRules = {
 // <label> that doesn't use ID, so that it can be copied in <repeatable>
     "LABEL.attach-previous" : function(e) {
         e.onclick = function() {
-            var e = this.previousSibling;
+            var e = $(this).previous();
             while (e!=null) {
                 if (e.tagName=="INPUT") {
                     e.click();
                     break;
                 }
-                e = e.previousSibling;
+                e = e.previous();
             }
         }
         e = null;
@@ -734,7 +642,7 @@ var hudsonRules = {
     "INPUT.auto-complete": function(e) {// form field with auto-completion support 
         // insert the auto-completion container
         var div = document.createElement("DIV");
-        e.parentNode.insertBefore(div,e.nextSibling);
+        e.parentNode.insertBefore(div,$(e).next()||null);
         e.style.position = "relative"; // or else by default it's absolutely positioned, making "width:100%" break
 
         var ds = new YAHOO.util.XHRDataSource(e.getAttribute("autoCompleteUrl"));
@@ -765,7 +673,7 @@ var hudsonRules = {
     "A.help-button" : function(e) {
         e.onclick = function() {
             var tr = findFollowingTR(this, "help-area");
-            var div = tr.firstChild.nextSibling.firstChild;
+            var div = $(tr).down().next().down();
 
             if (div.style.display != "block") {
                 div.style.display = "block";
@@ -894,21 +802,6 @@ var hudsonRules = {
             });
     },
 
-    // button to add a new repeatable block
-    "INPUT.repeatable-add" : function(e) {
-        makeButton(e,function(e) {
-            repeatableSupport.onAdd(e.target);
-        });
-        e = null; // avoid memory leak
-    },
-
-    "INPUT.repeatable-delete" : function(e) {
-        makeButton(e,function(e) {
-            repeatableSupport.onDelete(e.target);
-        });
-        e = null; // avoid memory leak
-    },
-
     // resizable text area
     "TEXTAREA" : function(textarea) {
         if(Element.hasClassName(textarea,"rich-editor")) {
@@ -1006,59 +899,11 @@ var hudsonRules = {
         e.setAttribute("ref", checkbox.id = "cb"+(iota++));
     },
 
-    // radioBlock.jelly
-    "INPUT.radio-block-control" : function(r) {
-        r.id = "radio-block-"+(iota++);
-
-        // when one radio button is clicked, we need to update foldable block for
-        // other radio buttons with the same name. To do this, group all the
-        // radio buttons with the same name together and hang it under the form object
-        var f = r.form;
-        var radios = f.radios;
-        if (radios == null)
-            f.radios = radios = {};
-
-        var g = radios[r.name];
-        if (g == null) {
-            radios[r.name] = g = object(radioBlockSupport);
-            g.buttons = [];
-        }
-
-        var s = findAncestorClass(r,"radio-block-start");
-        s.setAttribute("ref", r.id);
-
-        // find the end node
-        var e = (function() {
-            var e = s;
-            var cnt=1;
-            while(cnt>0) {
-                e = e.nextSibling;
-                if (Element.hasClassName(e,"radio-block-start"))
-                    cnt++;
-                if (Element.hasClassName(e,"radio-block-end"))
-                    cnt--;
-            }
-            return e;
-        })();
-
-        var u = function() {
-            g.updateSingleButton(r,s,e);
-        };
-        g.buttons.push(u);
-
-        // apply the initial visibility
-        u();
-
-        // install event handlers to update visibility.
-        // needs to use onclick and onchange for Safari compatibility
-        r.onclick = r.onchange = function() { g.updateButtons(); };
-    },
-
     // see RowVisibilityGroupTest
     "TR.rowvg-start" : function(e) {
         // figure out the corresponding end marker
         function findEnd(e) {
-            for( var depth=0; ; e=e.nextSibling) {
+            for( var depth=0; ; e=$(e).next()) {
                 if(Element.hasClassName(e,"rowvg-start"))    depth++;
                 if(Element.hasClassName(e,"rowvg-end"))      depth--;
                 if(depth==0)    return e;
@@ -1102,8 +947,7 @@ var hudsonRules = {
              */
             updateVisibility : function() {
                 var display = (this.outerVisible && this.innerVisible) ? "" : "none";
-                for (var e=this.start; e!=this.end; e=e.nextSibling) {
-                    if (e.nodeType!=1)  continue;
+                for (var e=this.start; e!=this.end; e=$(e).next()) {
                     if (e.rowVisibilityGroup && e!=this.start) {
                         e.rowVisibilityGroup.makeOuterVisisble(this.innerVisible);
                         e = e.rowVisibilityGroup.end; // the above call updates visibility up to e.rowVisibilityGroup.end inclusive
@@ -1122,7 +966,7 @@ var hudsonRules = {
              */
             eachRow : function(recursive,f) {
                 if (recursive) {
-                    for (var e=this.start; e!=this.end; e=e.nextSibling)
+                    for (var e=this.start; e!=this.end; e=$(e).next())
                         f(e);
                 } else {
                     throw "not implemented yet";
@@ -1133,11 +977,12 @@ var hudsonRules = {
 
     "TR.row-set-end": function(e) { // see rowSet.jelly and optionalBlock.jelly
         // figure out the corresponding start block
+        e = $(e);
         var end = e;
 
-        for( var depth=0; ; e=e.previousSibling) {
-            if(Element.hasClassName(e,"row-set-end"))        depth++;
-            if(Element.hasClassName(e,"row-set-start"))      depth--;
+        for( var depth=0; ; e=e.previous()) {
+            if(e.hasClassName("row-set-end"))        depth++;
+            if(e.hasClassName("row-set-start"))      depth--;
             if(depth==0)    break;
         }
         var start = e;
@@ -1190,35 +1035,15 @@ var hudsonRules = {
         e = null; // memory leak prevention
     },
 
-    // radio buttons in repeatable content
-    "DIV.repeated-chunk" : function(d) {
-        var inputs = d.getElementsByTagName('INPUT');
-        for (var i = 0; i < inputs.length; i++) {
-            if (inputs[i].type == 'radio') {
-                // Need to uniquify each set of radio buttons in repeatable content.
-                // buildFormTree will remove the prefix before form submission.
-                var prefix = d.getAttribute('radioPrefix');
-                if (!prefix) {
-                    prefix = 'removeme' + (iota++) + '_';
-                    d.setAttribute('radioPrefix', prefix);
-                }
-                inputs[i].name = prefix + inputs[i].name;
-                // Reselect anything unselected by browser before names uniquified:
-                if (inputs[i].defaultChecked) inputs[i].checked = true;
-            }
-        }
-    },
-
     // editableComboBox.jelly
     "INPUT.combobox" : function(c) {
         // Next element after <input class="combobox"/> should be <div class="combobox-values">
-        var vdiv = c.nextSibling;
-        if (Element.hasClassName(vdiv, "combobox-values")) {
+        var vdiv = $(c).next();
+        if (vdiv.hasClassName("combobox-values")) {
             createComboBox(c, function() {
-                var values = [];
-                for (var value = vdiv.firstChild; value; value = value.nextSibling)
-                    values.push(value.getAttribute('value'));
-                return values;
+                return vdiv.childElements().collect(function(value) {
+                    return value.getAttribute('value');
+                });
             });
         }
     },
@@ -1228,7 +1053,7 @@ var hudsonRules = {
         if(isInsideRemovable(e))    return;
 
         var subForms = [];
-        var start = findFollowingTR(e, 'dropdownList-container').firstChild.nextSibling, end;
+        var start = $(findFollowingTR(e, 'dropdownList-container')).down().next(), end;
         do { start = start.firstChild; } while (start && start.tagName != 'TR');
 
         if (start && !Element.hasClassName(start,'dropdownList-start'))
@@ -1242,9 +1067,9 @@ var hudsonRules = {
         function updateDropDownList() {
             for (var i = 0; i < subForms.length; i++) {
                 var show = e.selectedIndex == i;
-                var f = subForms[i];
+                var f = $(subForms[i]);
 
-                if (show)   renderOnDemand(f.nextSibling);
+                if (show)   renderOnDemand(f.next());
                 f.rowVisibilityGroup.makeInnerVisisble(show);
 
                 // TODO: this is actually incorrect in the general case if nested vg uses field-disabled
@@ -1260,31 +1085,6 @@ var hudsonRules = {
         e.onchange = updateDropDownList;
 
         updateDropDownList();
-    },
-
-    // select.jelly
-    "SELECT.select" : function(e) {
-        // controls that this SELECT box depends on
-        refillOnChange(e,function(params) {
-            var value = e.value;
-            updateListBox(e,e.getAttribute("fillUrl"),{
-                parameters: params,
-                onSuccess: function() {
-                    if (value=="") {
-                        // reflect the initial value. if the control depends on several other SELECT.select,
-                        // it may take several updates before we get the right items, which is why all these precautions.
-                        var v = e.getAttribute("value");
-                        if (v) {
-                            e.value = v;
-                            if (e.value==v) e.removeAttribute("value"); // we were able to apply our initial value
-                        }
-                    }
-
-                    // if the update changed the current selection, others listening to this control needs to be notified.
-                    if (e.value!=value) fireEvent(e,"change");
-                }
-            });
-        });
     },
 
     // combobox.jelly
@@ -1315,7 +1115,8 @@ var hudsonRules = {
     "A.showDetails" : function(e) {
         e.onclick = function() {
             this.style.display = 'none';
-            this.nextSibling.style.display = 'block';
+            $(this).next().style.display = 'block';
+            layoutUpdateCallback.call();
             return false;
         };
         e = null; // avoid memory leak
@@ -1326,7 +1127,7 @@ var hudsonRules = {
     },
 
     ".button-with-dropdown" : function (e) {
-        new YAHOO.widget.Button(e, { type: "menu", menu: e.nextSibling });
+        new YAHOO.widget.Button(e, { type: "menu", menu: $(e).next() });
     },
 
     "DIV.textarea-preview-container" : function (e) {
@@ -1404,7 +1205,14 @@ var hudsonRules = {
         layoutUpdateCallback.add(adjustSticker);
     },
 
-    "#top-sticker" : function(sticker) {
+    "#top-sticker" : function(sticker) {// legacy
+        this[".top-sticker"](sticker);
+    },
+
+    /**
+     * @param {HTMLElement} sticker
+     */
+    ".top-sticker" : function(sticker) {
         var DOM = YAHOO.util.Dom;
 
         var shadow = document.createElement("div");
@@ -1412,7 +1220,7 @@ var hudsonRules = {
 
         var edge = document.createElement("div");
         edge.className = "top-sticker-edge";
-        sticker.insertBefore(edge);
+        sticker.insertBefore(edge,sticker.firstChild);
 
         function adjustSticker() {
             shadow.style.height = sticker.offsetHeight + "px";
@@ -1433,6 +1241,7 @@ var hudsonRules = {
         adjustSticker();
     }
 };
+var hudsonRules = jenkinsRules; // legacy name
 
 function applyTooltip(e,text) {
         // copied from YAHOO.widget.Tooltip.prototype.configContext to efficiently add a new element
@@ -1478,7 +1287,7 @@ function refillOnChange(e,onChange) {
                 if (window.YUI!=null)      YUI.log("Unable to find a nearby control of the name "+name,"warn")
                 return;
             }
-            try { c.addEventListener("change",h,false); } catch (ex) { c.attachEvent("onchange",h); }
+            $(c).observe("change",h);
             deps.push({name:Path.tail(name),control:c});
         });
     }
@@ -1497,7 +1306,7 @@ function xor(a,b) {
 // used by editableDescription.jelly to replace the description field with a form
 function replaceDescription() {
     var d = document.getElementById("description");
-    d.firstChild.nextSibling.innerHTML = "<div class='spinner-right'>loading...</div>";
+    $(d).down().next().innerHTML = "<div class='spinner-right'>loading...</div>";
     new Ajax.Request(
         "./descriptionForm",
         {
@@ -1521,9 +1330,9 @@ function replaceDescription() {
 function applyNameRef(s,e,id) {
     $(id).groupingNode = true;
     // s contains the node itself
-    for(var x=s.nextSibling; x!=e; x=x.nextSibling) {
+    for(var x=$(s).next(); x!=e; x=x.next()) {
         // to handle nested <f:rowSet> correctly, don't overwrite the existing value
-        if(x.nodeType==1 && x.getAttribute("nameRef")==null)
+        if(x.getAttribute("nameRef")==null)
             x.setAttribute("nameRef",id);
     }
 }
@@ -1533,14 +1342,14 @@ function applyNameRef(s,e,id) {
 //   @param c     checkbox element
 function updateOptionalBlock(c,scroll) {
     // find the start TR
-    var s = c;
-    while(!Element.hasClassName(s, "optional-block-start"))
-        s = s.parentNode;
+    var s = $(c);
+    while(!s.hasClassName("optional-block-start"))
+        s = s.up();
 
     // find the beginning of the rowvg
-    var vg = s;
-    while (!Element.hasClassName(vg,"rowvg-start"))
-        vg = vg.nextSibling;
+    var vg =s;
+    while (!vg.hasClassName("rowvg-start"))
+        vg = vg.next();
 
     var checked = xor(c.checked,Element.hasClassName(c,"negative"));
 
@@ -1561,6 +1370,7 @@ function updateOptionalBlock(c,scroll) {
             var tr = findAncestor(homeField, 'TR');
             if (tr != null) {
                 tr.style.display = c.checked ? 'none' : '';
+                layoutUpdateCallback.call();
             }
         }
     }
@@ -1666,32 +1476,40 @@ function expandTextArea(button,id) {
 
     n.parentNode.innerHTML = 
         "<textarea rows=8 class='setting-input' name='"+field.name+"'>"+value+"</textarea>";
+    layoutUpdateCallback.call();
 }
 
 // refresh a part of the HTML specified by the given ID,
 // by using the contents fetched from the given URL.
 function refreshPart(id,url) {
     var f = function() {
-        new Ajax.Request(url, {
-            onSuccess: function(rsp) {
-                var hist = $(id);
-                var p = hist.parentNode;
-                var next = hist.nextSibling;
-                p.removeChild(hist);
+        if(isPageVisible()) {
+            new Ajax.Request(url, {
+                onSuccess: function(rsp) {
+                    var hist = $(id);
+                    var p = hist.up();
+                    var next = hist.next();
+                    p.removeChild(hist);
 
-                var div = document.createElement('div');
-                div.innerHTML = rsp.responseText;
+                    var div = document.createElement('div');
+                    div.innerHTML = rsp.responseText;
 
-                var node = div.firstChild;
-                p.insertBefore(node, next);
+                    var node = $(div).firstDescendant();
+                    p.insertBefore(node, next);
 
-                Behaviour.applySubtree(node);
-                layoutUpdateCallback.call();
+                    Behaviour.applySubtree(node);
+                    layoutUpdateCallback.call();
 
-                if(isRunAsTest) return;
-                refreshPart(id,url);
-            }
-        });
+                    if(isRunAsTest) return;
+                    refreshPart(id,url);
+                }
+            });    
+        } else {
+            // Reschedule
+            if(isRunAsTest) return;
+            refreshPart(id,url);
+        }
+        
     };
     // if run as test, just do it once and do it now to make sure it's working,
     // but don't repeat.
@@ -1762,199 +1580,47 @@ Form.findMatchingInput = function(base, name) {
     return null;        // not found
 }
 
-// code for supporting repeatable.jelly
-var repeatableSupport = {
-    // set by the inherited instance to the insertion point DIV
-    insertionPoint: null,
-
-    // HTML text of the repeated chunk
-    blockHTML: null,
-
-    // containing <div>.
-    container: null,
-
-    // block name for structured HTML
-    name : null,
-
-    withDragDrop: false,
-
-    // do the initialization
-    init : function(container,master,insertionPoint) {
-        this.container = $(container);
-        this.container.tag = this;
-        master = $(master);
-        this.blockHTML = master.innerHTML;
-        master.parentNode.removeChild(master);
-        this.insertionPoint = $(insertionPoint);
-        this.name = master.getAttribute("name");
-        this.update();
-        this.withDragDrop = initContainerDD(container);
-    },
-
-    // insert one more block at the insertion position
-    expand : function() {
-        // importNode isn't supported in IE.
-        // nc = document.importNode(node,true);
-        var nc = document.createElement("div");
-        nc.className = "repeated-chunk";
-        nc.setAttribute("name",this.name);
-        nc.innerHTML = this.blockHTML;
-        this.insertionPoint.parentNode.insertBefore(nc, this.insertionPoint);
-        if (this.withDragDrop) prepareDD(nc);
-
-        Behaviour.applySubtree(nc,true);
-        this.update();
-    },
-
-    // update CSS classes associated with repeated items.
-    update : function() {
-        var children = [];
-        for( var n=this.container.firstChild; n!=null; n=n.nextSibling )
-            if(Element.hasClassName(n,"repeated-chunk"))
-                children.push(n);
-
-        if(children.length==0) {
-            // noop
-        } else
-        if(children.length==1) {
-            children[0].className = "repeated-chunk first last only";
-        } else {
-            children[0].className = "repeated-chunk first";
-            for(var i=1; i<children.length-1; i++)
-                children[i].className = "repeated-chunk middle";
-            children[children.length-1].className = "repeated-chunk last";
-        }
-    },
-
-    // these are static methods that don't rely on 'this'
-
-    // called when 'delete' button is clicked
-    onDelete : function(n) {
-        n = findAncestorClass(n,"repeated-chunk");
-        var p = n.parentNode;
-        p.removeChild(n);
-        if (p.tag)
-            p.tag.update();
-    },
-
-    // called when 'add' button is clicked
-    onAdd : function(n) {
-        while(n.tag==null)
-            n = n.parentNode;
-        n.tag.expand();
-        // Hack to hide tool home when a new tool has some installers.
-        var inputs = n.getElementsByTagName('INPUT');
-        for (var i = 0; i < inputs.length; i++) {
-            var input = inputs[i];
-            if (input.name == 'hudson-tools-InstallSourceProperty') {
-                updateOptionalBlock(input, false);
-            }
-        }
-    }
-};
-
-// prototype object to be duplicated for each radio button group
-var radioBlockSupport = {
-    buttons : null, // set of functions, one for updating one radio block each
-
-    updateButtons : function() {
-        for( var i=0; i<this.buttons.length; i++ )
-            this.buttons[i]();
-    },
-
-    // update one block based on the status of the given radio button
-    updateSingleButton : function(radio, blockStart, blockEnd) {
-        var show = radio.checked;
-        
-        if (blockStart.getAttribute('hasHelp') == 'true') {
-            n = blockStart.nextSibling;
-        } else {
-            n = blockStart;
-        }
-        while((n = n.nextSibling) != blockEnd) {
-          n.style.display = show ? "" : "none";
-        }
-    }
-};
-
 function updateBuildHistory(ajaxUrl,nBuild) {
     if(isRunAsTest) return;
     $('buildHistory').headers = ["n",nBuild];
 
     function updateBuilds() {
-        var bh = $('buildHistory');
-        if (bh.headers == null) {
-            // Yahoo.log("Missing headers in buildHistory element");
-        }
-        new Ajax.Request(ajaxUrl, {
-            requestHeaders: bh.headers,
-            onSuccess: function(rsp) {
-                var rows = bh.rows;
-
-                //delete rows with transitive data
-                while (rows.length > 2 && Element.hasClassName(rows[1], "transitive"))
-                    Element.remove(rows[1]);
-
-                // insert new rows
-                var div = document.createElement('div');
-                div.innerHTML = rsp.responseText;
-                Behaviour.applySubtree(div);
-
-                var pivot = rows[0];
-                var newRows = div.firstChild.rows;
-                for (var i = newRows.length - 1; i >= 0; i--) {
-                    pivot.parentNode.insertBefore(newRows[i], pivot.nextSibling);
-                }
-
-                // next update
-                bh.headers = ["n",rsp.getResponseHeader("n")];
-                window.setTimeout(updateBuilds, 5000);
+        if(isPageVisible()){
+            var bh = $('buildHistory');
+            if (bh.headers == null) {
+                // Yahoo.log("Missing headers in buildHistory element");
             }
-        });
+            new Ajax.Request(ajaxUrl, {
+                requestHeaders: bh.headers,
+                onSuccess: function(rsp) {
+                    var rows = bh.rows;
+
+                    //delete rows with transitive data
+                    while (rows.length > 2 && Element.hasClassName(rows[1], "transitive"))
+                        Element.remove(rows[1]);
+
+                    // insert new rows
+                    var div = document.createElement('div');
+                    div.innerHTML = rsp.responseText;
+                    Behaviour.applySubtree(div);
+
+                    var pivot = rows[0];
+                    var newRows = $(div).firstDescendant().rows;
+                    for (var i = newRows.length - 1; i >= 0; i--) {
+                        pivot.parentNode.insertBefore(newRows[i], pivot.nextSibling);
+                    }
+
+                    // next update
+                    bh.headers = ["n",rsp.getResponseHeader("n")];
+                    window.setTimeout(updateBuilds, 5000);
+                }
+            });
+        } else {
+            // Reschedule again
+            window.setTimeout(updateBuilds, 5000);
+        }
     }
     window.setTimeout(updateBuilds, 5000);
-}
-
-// send async request to the given URL (which will send back serialized ListBoxModel object),
-// then use the result to fill the list box.
-function updateListBox(listBox,url,config) {
-    config = config || {};
-    config = object(config);
-    var originalOnSuccess = config.onSuccess;
-    config.onSuccess = function(rsp) {
-        var l = $(listBox);
-        var currentSelection = l.value;
-
-        // clear the contents
-        while(l.length>0)   l.options[0] = null;
-
-        var selectionSet = false; // is the selection forced by the server?
-        var possibleIndex = null; // if there's a new option that matches the current value, remember its index
-        var opts = eval('('+rsp.responseText+')').values;
-        for( var i=0; i<opts.length; i++ ) {
-            l.options[i] = new Option(opts[i].name,opts[i].value);
-            if(opts[i].selected) {
-                l.selectedIndex = i;
-                selectionSet = true;
-            }
-            if (opts[i].value==currentSelection)
-                possibleIndex = i;
-        }
-
-        // if no value is explicitly selected by the server, try to select the same value
-        if (!selectionSet && possibleIndex!=null)
-            l.selectedIndex = possibleIndex;
-
-        if (originalOnSuccess!=undefined)
-            originalOnSuccess(rsp);
-    },
-    config.onFailure = function(rsp) {
-        // deleting values can result in the data loss, so let's not do that
-//        var l = $(listBox);
-//        l.options[0] = null;
-    }
-
-    new Ajax.Request(url, config);
 }
 
 // get the cascaded computed style value. 'a' is the style name like 'backgroundColor'
@@ -1964,7 +1630,49 @@ function getStyle(e,a){
   if(e.currentStyle)
     return e.currentStyle[a];
   return null;
-};
+}
+
+/**
+ * Makes sure the given element is within the viewport.
+ *
+ * @param {HTMLElement} e
+ *      The element to bring into the viewport.
+ */
+function ensureVisible(e) {
+    var viewport = YAHOO.util.Dom.getClientRegion();
+    var pos      = YAHOO.util.Dom.getRegion(e);
+
+    var Y = viewport.top;
+    var H = viewport.height;
+
+    function handleStickers(name,f) {
+        var e = $(name);
+        if (e) f(e);
+        document.getElementsBySelector("."+name).each(f);
+    }
+
+    // if there are any stickers around, subtract them from the viewport
+    handleStickers("top-sticker",function (t) {
+        t = t.clientHeight;
+        Y+=t; H-=t;
+    });
+
+    handleStickers("bottom-sticker",function (b) {
+        b = b.clientHeight;
+        H-=b;
+    });
+
+    var y = pos.top;
+    var h = pos.height;
+
+    var d = (y+h)-(Y+H);
+    if (d>0) {
+        document.body.scrollTop += d;
+    } else {
+        var d = Y-y;
+        if (d>0)    document.body.scrollTop -= d;
+    }
+}
 
 // set up logic behind the search box
 function createSearchBox(searchURL) {
@@ -2282,116 +1990,6 @@ var hoverNotification = (function() {
     };
 })();
 
-/*
-    Drag&Drop implementation for heterogeneous/repeatable lists.
- */
-function initContainerDD(e) {
-    if (!Element.hasClassName(e,"with-drag-drop")) return false;
-
-    for (e=e.firstChild; e!=null; e=e.nextSibling) {
-        if (Element.hasClassName(e,"repeated-chunk"))
-            prepareDD(e);
-    }
-    return true;
-}
-function prepareDD(e) {
-    var h = e;
-    // locate a handle
-    while (h!=null && !Element.hasClassName(h,"dd-handle"))
-        h = h.firstChild ? h.firstChild : h.nextSibling;
-    if (h!=null) {
-        var dd = new DragDrop(e);
-        dd.setHandleElId(h);
-    }
-}
-
-var DragDrop = function(id, sGroup, config) {
-    DragDrop.superclass.constructor.apply(this, arguments);
-};
-
-(function() {
-    var Dom = YAHOO.util.Dom;
-    var Event = YAHOO.util.Event;
-    var DDM = YAHOO.util.DragDropMgr;
-
-    YAHOO.extend(DragDrop, YAHOO.util.DDProxy, {
-        startDrag: function(x, y) {
-            var el = this.getEl();
-
-            this.resetConstraints();
-            this.setXConstraint(0,0);    // D&D is for Y-axis only
-
-            // set Y constraint to be within the container
-            var totalHeight = el.parentNode.offsetHeight;
-            var blockHeight = el.offsetHeight;
-            this.setYConstraint(el.offsetTop, totalHeight-blockHeight-el.offsetTop);
-
-            el.style.visibility = "hidden";
-
-            this.goingUp = false;
-            this.lastY = 0;
-        },
-
-        endDrag: function(e) {
-            var srcEl = this.getEl();
-            var proxy = this.getDragEl();
-
-            // Show the proxy element and animate it to the src element's location
-            Dom.setStyle(proxy, "visibility", "");
-            var a = new YAHOO.util.Motion(
-                proxy, {
-                    points: {
-                        to: Dom.getXY(srcEl)
-                    }
-                },
-                0.2,
-                YAHOO.util.Easing.easeOut
-            )
-            var proxyid = proxy.id;
-            var thisid = this.id;
-
-            // Hide the proxy and show the source element when finished with the animation
-            a.onComplete.subscribe(function() {
-                    Dom.setStyle(proxyid, "visibility", "hidden");
-                    Dom.setStyle(thisid, "visibility", "");
-                });
-            a.animate();
-        },
-
-        onDrag: function(e) {
-
-            // Keep track of the direction of the drag for use during onDragOver
-            var y = Event.getPageY(e);
-
-            if (y < this.lastY) {
-                this.goingUp = true;
-            } else if (y > this.lastY) {
-                this.goingUp = false;
-            }
-
-            this.lastY = y;
-        },
-
-        onDragOver: function(e, id) {
-            var srcEl = this.getEl();
-            var destEl = Dom.get(id);
-
-            // We are only concerned with list items, we ignore the dragover
-            // notifications for the list.
-            if (destEl.nodeName == "DIV" && Dom.hasClass(destEl,"repeated-chunk")
-                    // Nested lists.. ensure we don't drag out of this list or into a nested one:
-                    && destEl.parentNode==srcEl.parentNode) {
-                var p = destEl.parentNode;
-
-                // if going up, insert above the target element
-                p.insertBefore(srcEl, this.goingUp?destEl:destEl.nextSibling);
-
-                DDM.refreshCache();
-            }
-        }
-    });
-})();
-
 /**
  * Loads the script specified by the URL.
  *
@@ -2461,7 +2059,7 @@ var downloadService = {
     }
 };
 
-// update center service. to remain compatible with earlier version of Hudson, aliased.
+// update center service. to remain compatible with earlier version of Jenkins, aliased.
 var updateCenter = downloadService;
 
 /*
@@ -2525,8 +2123,8 @@ function validateButton(checkUrl,paramList,button) {
       }
   });
 
-  var spinner = Element.up(button,"DIV").nextSibling;
-  var target = spinner.nextSibling;
+  var spinner = $(button).up("DIV").next();
+  var target = spinner.next();
   spinner.style.display="block";
 
   new Ajax.Request(checkUrl, {

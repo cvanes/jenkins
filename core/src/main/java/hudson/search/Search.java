@@ -24,12 +24,9 @@
  */
 package hudson.search;
 
-import hudson.Extension;
 import static javax.servlet.http.HttpServletResponse.SC_NOT_FOUND;
 
 import hudson.Util;
-import hudson.model.User;
-import hudson.model.UserPropertyDescriptor;
 import hudson.util.EditDistance;
 import java.io.IOException;
 import java.util.AbstractList;
@@ -42,7 +39,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.servlet.ServletException;
-import net.sf.json.JSONObject;
 import org.kohsuke.stapler.Ancestor;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
@@ -53,9 +49,14 @@ import org.kohsuke.stapler.export.ExportedBean;
 import org.kohsuke.stapler.export.Flavor;
 
 /**
- * Web-bound object that serves QuickSilver-like search requests.
+ * Web-bound object that provides search/navigation capability.
+ *
+ * <p>
+ * This object is bound to "./search" of a model object via {@link SearchableModelObject} and serves
+ * HTTP requests coming from JavaScript to provide search result and auto-completion.
  *
  * @author Kohsuke Kawaguchi
+ * @see SearchableModelObject
  */
 public class Search {
     public void doIndex(StaplerRequest req, StaplerResponse rsp) throws IOException, ServletException {

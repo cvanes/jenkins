@@ -28,13 +28,16 @@ import hudson.init.InitMilestone;
 import hudson.init.InitStrategy;
 import hudson.init.InitializerFinder;
 import hudson.model.AbstractModelObject;
+import hudson.model.AdministrativeMonitor;
+import hudson.model.Api;
 import hudson.model.Descriptor;
 import hudson.model.Failure;
 import hudson.model.UpdateCenter;
 import hudson.model.UpdateSite;
+import hudson.security.Permission;
+import hudson.security.PermissionScope;
 import hudson.util.CyclicGraphDetector;
 import hudson.util.CyclicGraphDetector.CycleDetectedException;
-import hudson.util.FormValidation;
 import hudson.util.IOException2;
 import hudson.util.PersistedList;
 import hudson.util.Service;
@@ -43,6 +46,7 @@ import jenkins.InitReactorRunner;
 import jenkins.RestartRequiredException;
 import jenkins.YesNoMaybe;
 import jenkins.model.Jenkins;
+import jenkins.util.io.OnMaster;
 import org.apache.commons.fileupload.FileItem;
 import org.apache.commons.fileupload.disk.DiskFileItemFactory;
 import org.apache.commons.fileupload.servlet.ServletFileUpload;
@@ -60,6 +64,8 @@ import org.kohsuke.stapler.HttpResponses;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.StaplerResponse;
+import org.kohsuke.stapler.export.Exported;
+import org.kohsuke.stapler.export.ExportedBean;
 
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
@@ -93,7 +99,8 @@ import static hudson.init.InitMilestone.*;
  *
  * @author Kohsuke Kawaguchi
  */
-public abstract class PluginManager extends AbstractModelObject {
+@ExportedBean
+public abstract class PluginManager extends AbstractModelObject implements OnMaster {
     /**
      * All discovered plugins.
      */
@@ -157,6 +164,10 @@ public abstract class PluginManager extends AbstractModelObject {
         strategy = createPluginStrategy();
     }
 
+    public Api getApi() {
+        return new Api(this);
+    }
+
     /**
      * Called immediately after the construction.
      * This is a separate method so that code executed from here will see a valid value in
@@ -196,7 +207,7 @@ public abstract class PluginManager extends AbstractModelObject {
                                             PluginWrapper p = strategy.createPluginWrapper(arc);
                                             if (isDuplicate(p)) return;
 
-                                            p.isBundled = bundledPlugins.contains(arc.getName());
+                                            p.isBundled = containsHpiJpi(bundledPlugins, arc.getName());
                                             plugins.add(p);
                                         } catch (IOException e) {
                                             failedPlugins.add(new FailedPlugin(arc.getName(),e));
@@ -243,6 +254,18 @@ public abstract class PluginManager extends AbstractModelObject {
                                                         r.add(p);
                                                 }
                                             }
+                                            
+                                            @Override
+                                            protected void reactOnCycle(PluginWrapper q, List<PluginWrapper> cycle)
+                                                    throws hudson.util.CyclicGraphDetector.CycleDetectedException {
+                                                
+                                                LOGGER.log(Level.SEVERE, "found cycle in plugin dependencies: (root="+q+", deactivating all involved) "+Util.join(cycle," -> "));
+                                                for (PluginWrapper pluginWrapper : cycle) {
+                                                    pluginWrapper.setHasCycleDependency(true);
+                                                    failedPlugins.add(new FailedPlugin(pluginWrapper.getShortName(), new CycleDetectedException(cycle)));
+                                                }
+                                            }
+                                            
                                         };
                                         cgd.run(getPlugins());
 
@@ -332,6 +355,15 @@ public abstract class PluginManager extends AbstractModelObject {
         }});
     }
 
+    /*
+     * contains operation that considers xxx.hpi and xxx.jpi as equal
+     * this is necessary since the bundled plugins are still called *.hpi 
+     */
+    private boolean containsHpiJpi(Collection<String> bundledPlugins, String name) {
+        return bundledPlugins.contains(name.replaceAll("\\.hpi",".jpi"))
+                || bundledPlugins.contains(name.replaceAll("\\.jpi",".hpi"));
+    }
+
     /**
      * TODO: revisit where/how to expose this. This is an experiment.
      */
@@ -402,12 +434,9 @@ public abstract class PluginManager extends AbstractModelObject {
         File file = new File(rootDir, fileName);
         File pinFile = new File(rootDir, fileName+".pinned");
 
-        {// normalization first
-            File legacyFile = new File(rootDir,legacyName);
-            if (legacyFile.exists())    legacyFile.renameTo(file);
-            File legacyPinFile = new File(rootDir,legacyName+".pinned");
-            if (legacyPinFile.exists())    legacyPinFile.renameTo(pinFile);
-        }
+        // normalization first, if the old file exists.
+        rename(new File(rootDir,legacyName),file);
+        rename(new File(rootDir,legacyName+".pinned"),pinFile);
         
         // update file if:
         //  - no file exists today
@@ -419,6 +448,20 @@ public abstract class PluginManager extends AbstractModelObject {
             // - to avoid unpacking as much as possible, but still do it on both upgrade and downgrade
             // - to make sure the value is not changed after each restart, so we can avoid
             // unpacking the plugin itself in ClassicPluginStrategy.explode
+        }
+    }
+
+    /**
+     * Rename a legacy file to a new name, with care to Windows where {@link File#renameTo(File)}
+     * doesn't work if the destination already exists.
+     */
+    private void rename(File legacyFile, File newFile) throws IOException {
+        if (!legacyFile.exists())   return;
+        if (newFile.exists()) {
+            Util.deleteFile(newFile);
+        }
+        if (!legacyFile.renameTo(newFile)) {
+            LOGGER.warning("Failed to rename " + legacyFile + " to " + newFile);
         }
     }
 
@@ -464,7 +507,11 @@ public abstract class PluginManager extends AbstractModelObject {
     public boolean isPluginUploaded() {
         return pluginUploaded;
     }
-    
+
+    /**
+     * All discovered plugins.
+     */
+    @Exported
     public List<PluginWrapper> getPlugins() {
         return plugins;
     }
@@ -565,7 +612,7 @@ public abstract class PluginManager extends AbstractModelObject {
     }
 
     public HttpResponse doUpdateSources(StaplerRequest req) throws IOException {
-        Jenkins.getInstance().checkPermission(Jenkins.ADMINISTER);
+        Jenkins.getInstance().checkPermission(CONFIGURE_UPDATECENTER);
 
         if (req.hasParameter("remove")) {
             UpdateCenter uc = Jenkins.getInstance().getUpdateCenter();
@@ -612,7 +659,7 @@ public abstract class PluginManager extends AbstractModelObject {
      */
     public HttpResponse doSiteConfigure(@QueryParameter String site) throws IOException {
         Jenkins hudson = Jenkins.getInstance();
-        hudson.checkPermission(Jenkins.ADMINISTER);
+        hudson.checkPermission(CONFIGURE_UPDATECENTER);
         UpdateCenter uc = hudson.getUpdateCenter();
         PersistedList<UpdateSite> sites = uc.getSites();
         for (UpdateSite s : sites) {
@@ -627,7 +674,7 @@ public abstract class PluginManager extends AbstractModelObject {
 
     public HttpResponse doProxyConfigure(StaplerRequest req) throws IOException, ServletException {
         Jenkins jenkins = Jenkins.getInstance();
-        jenkins.checkPermission(Jenkins.ADMINISTER);
+        jenkins.checkPermission(CONFIGURE_UPDATECENTER);
 
         ProxyConfiguration pc = req.bindJSON(ProxyConfiguration.class, req.getSubmittedForm());
         if (pc.name==null) {
@@ -645,7 +692,7 @@ public abstract class PluginManager extends AbstractModelObject {
      */
     public HttpResponse doUploadPlugin(StaplerRequest req) throws IOException, ServletException {
         try {
-            Jenkins.getInstance().checkPermission(Jenkins.ADMINISTER);
+            Jenkins.getInstance().checkPermission(UPLOAD_PLUGINS);
 
             ServletFileUpload upload = new ServletFileUpload(new DiskFileItemFactory());
 
@@ -660,6 +707,7 @@ public abstract class PluginManager extends AbstractModelObject {
                 throw new Failure(hudson.model.Messages.Hudson_NotAPlugin(fileName));
             }
             final String baseName = FilenameUtils.getBaseName(fileName);
+            new File(rootDir, baseName + ".hpi").delete(); // don't keep confusing legacy *.hpi
             fileItem.write(new File(rootDir, baseName + ".jpi")); // rename all new plugins to *.jpi
             fileItem.delete();
 
@@ -786,7 +834,10 @@ public abstract class PluginManager extends AbstractModelObject {
     private static final Logger LOGGER = Logger.getLogger(PluginManager.class.getName());
 
     public static boolean FAST_LOOKUP = !Boolean.getBoolean(PluginManager.class.getName()+".noFastLookup");
-
+    
+    public static final Permission UPLOAD_PLUGINS = new Permission(Jenkins.PERMISSIONS, "UploadPlugins", Messages._PluginManager_UploadPluginsPermission_Description(),Jenkins.ADMINISTER,PermissionScope.JENKINS);
+    public static final Permission CONFIGURE_UPDATECENTER = new Permission(Jenkins.PERMISSIONS, "ConfigureUpdateCenter", Messages._PluginManager_ConfigureUpdateCenterPermission_Description(),Jenkins.ADMINISTER,PermissionScope.JENKINS);
+    
     /**
      * Remembers why a plugin failed to deploy.
      */
@@ -809,5 +860,33 @@ public abstract class PluginManager extends AbstractModelObject {
      */
     /*package*/ static final class PluginInstanceStore {
         final Map<PluginWrapper,Plugin> store = new Hashtable<PluginWrapper,Plugin>();
+    }
+    
+    /**
+     * {@link AdministrativeMonitor} that checks if there are any plugins with cycle dependencies.
+     */
+    @Extension
+    public static final class PluginCycleDependenciesMonitor extends AdministrativeMonitor {
+        
+        private transient volatile boolean isActive = false;
+        
+        private transient volatile List<String> pluginsWithCycle; 
+        
+        public boolean isActivated() {
+            if(pluginsWithCycle == null){
+                pluginsWithCycle = new ArrayList<String>();
+                for (PluginWrapper p : Jenkins.getInstance().getPluginManager().getPlugins()) {
+                    if(p.hasCycleDependency()){
+                        pluginsWithCycle.add(p.getShortName());
+                        isActive = true;
+                    }
+                }
+            }
+            return isActive;
+        }
+
+        public List<String> getPluginsWithCycle() {
+            return pluginsWithCycle;
+        }
     }
 }

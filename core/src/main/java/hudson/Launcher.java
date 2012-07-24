@@ -319,9 +319,9 @@ public abstract class Launcher {
         }
 
         /**
-         * Indicates that the caller will directly write to the child process {@code stin} }via
-         * {@link Proc#getStdin()} (whereas by default you call {@link #stdin(InputStream)}
-         * and let Jenkins pump your {@link InputStream} of choosing to stdin.
+         * Indicates that the caller will directly write to the child process {@link #stdin()} via {@link Proc#getStdin()}.
+         * (Whereas by default you call {@link #stdin(InputStream)}
+         * and let Jenkins pump your {@link InputStream} of choosing to stdin.)
          * @since 1.399
          */
         public ProcStarter writeStdin() {
@@ -652,7 +652,9 @@ public abstract class Launcher {
             @Override
             public Proc launch(ProcStarter starter) throws IOException {
                 starter.commands.addAll(0,Arrays.asList(prefix));
-                starter.masks = prefix(starter.masks);
+                if (starter.masks != null) {
+                    starter.masks = prefix(starter.masks);
+                }
                 return outer.launch(starter);
             }
 

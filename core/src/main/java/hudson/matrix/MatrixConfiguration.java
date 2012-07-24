@@ -24,6 +24,10 @@
 package hudson.matrix;
 
 import hudson.Util;
+import hudson.model.Action;
+import hudson.model.Executor;
+import hudson.model.InvisibleAction;
+import hudson.model.Queue.QueueAction;
 import hudson.util.AlternativeUiTextProvider;
 import hudson.util.DescribableList;
 import hudson.model.AbstractBuild;
@@ -77,6 +81,23 @@ public class MatrixConfiguration extends Project<MatrixConfiguration,MatrixRun> 
         // directory name is not a name for us --- it's taken from the combination name
         super.onLoad(parent, combination.toString());
     }
+    
+    @Override
+    protected void updateTransientActions(){
+        // This method is exactly the same as in {@link #AbstractProject}. 
+        // Enabling to call this method from MatrixProject is the only reason for overriding.
+        super.updateTransientActions();
+    }
+
+    @Override
+    public boolean isConcurrentBuild() {
+        return getParent().isConcurrentBuild();
+    }
+
+    @Override
+    public void setConcurrentBuild(boolean b) throws IOException {
+        throw new UnsupportedOperationException("The setting can be only changed at MatrixProject");
+    }
 
     /**
      * Used during loading to set the combination back.
@@ -105,12 +126,14 @@ public class MatrixConfiguration extends Project<MatrixConfiguration,MatrixRun> 
      */
     @Override
     public int getNextBuildNumber() {
-        AbstractBuild lb = getParent().getLastBuild();
-        if(lb==null)    return 0;
-        
+        AbstractBuild<?,?> lb = getParent().getLastBuild();
 
-        int n=lb.getNumber();
-        if(!lb.isBuilding())    n++;
+        while (lb!=null && lb.isBuilding()) {
+            lb = lb.getPreviousBuild();
+        }
+        if(lb==null)    return 0;
+
+        int n=lb.getNumber()+1;
 
         lb = getLastBuild();
         if(lb!=null)
@@ -174,9 +197,17 @@ public class MatrixConfiguration extends Project<MatrixConfiguration,MatrixRun> 
 
     @Override
     protected MatrixRun newBuild() throws IOException {
-        // for every MatrixRun there should be a parent MatrixBuild
+        List<Action> actions = Executor.currentExecutor().getCurrentWorkUnit().context.actions;
         MatrixBuild lb = getParent().getLastBuild();
+        for (Action a : actions) {
+            if (a instanceof ParentBuildAction) {
+                lb = ((ParentBuildAction) a).parent;
+            }
+        }
+
+        // for every MatrixRun there should be a parent MatrixBuild
         MatrixRun lastBuild = new MatrixRun(this, lb.getTimestamp());
+
         lastBuild.number = lb.getNumber();
 
         builds.put(lastBuild);
@@ -306,7 +337,7 @@ public class MatrixConfiguration extends Project<MatrixConfiguration,MatrixRun> 
      * See http://cygwin.com/ml/cygwin/2005-04/msg00395.html and
      * http://www.nabble.com/Windows-Filename-too-long-errors-t3161089.html for
      * the background of this issue. Setting this flag to true would
-     * cause Hudson to use cryptic but short path name, giving more room for
+     * cause Jenkins to use cryptic but short path name, giving more room for
      * jobs to use longer path names.
      */
     public static boolean useShortWorkspaceName = Boolean.getBoolean(MatrixConfiguration.class.getName()+".useShortWorkspaceName");
@@ -325,6 +356,16 @@ public class MatrixConfiguration extends Project<MatrixConfiguration,MatrixRun> 
      *      Can be null.
      */
     public boolean scheduleBuild(ParametersAction parameters, Cause c) {
-        return Jenkins.getInstance().getQueue().schedule(this, getQuietPeriod(), parameters, new CauseAction(c))!=null;
+        return Jenkins.getInstance().getQueue().schedule(this, getQuietPeriod(), parameters, new CauseAction(c), new ParentBuildAction())!=null;
+    }
+
+    /**
+     *
+     */
+    public static class ParentBuildAction extends InvisibleAction implements QueueAction {
+        public transient MatrixBuild parent = (MatrixBuild)Executor.currentExecutor().getCurrentExecutable();
+        public boolean shouldSchedule(List<Action> actions) {
+            return true;
+        }
     }
 }

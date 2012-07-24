@@ -255,7 +255,7 @@ public class Queue extends ResourceController implements Saveable {
 
     public void setLoadBalancer(LoadBalancer loadBalancer) {
         if(loadBalancer==null)  throw new IllegalArgumentException();
-        this.loadBalancer = loadBalancer;
+        this.loadBalancer = loadBalancer.sanitize();
     }
 
     public QueueSorter getSorter() {
@@ -692,6 +692,13 @@ public class Queue extends ResourceController implements Saveable {
     }
 
     /**
+     * Counts all the {@link BuildableItem}s currently in the queue.
+     */
+    public synchronized int countBuildableItems() {
+        return buildables.size()+pendings.size();
+    }
+
+    /**
      * Gets the information about the queue item for the given project.
      *
      * @return null if the project is not in the queue.
@@ -910,12 +917,12 @@ public class Queue extends ResourceController implements Saveable {
             }
         }
 
-        // waitingList -> buldable/blocked
+        // waitingList -> buildable/blocked
         while (!waitingList.isEmpty()) {
             WaitingItem top = peek();
 
             if (!top.timestamp.before(new GregorianCalendar()))
-                return; // finished moving all ready items from queue
+                break; // finished moving all ready items from queue
 
             waitingList.remove(top);
             Task p = top.task;
@@ -1210,6 +1217,8 @@ public class Queue extends ResourceController implements Saveable {
         public final Task task;
 
         private /*almost final*/ transient FutureImpl future;
+        
+        private final long inQueueSince;
 
         /**
          * Build is blocked because another build is in progress,
@@ -1232,6 +1241,24 @@ public class Queue extends ResourceController implements Saveable {
          */
         @Exported
         public boolean isStuck() { return false; }
+        
+        /**
+         * Since when is this item in the queue.
+         * @return Unix timestamp
+         */
+        @Exported
+        public long getInQueueSince() {
+            return this.inQueueSince;
+        }
+        
+        /**
+         * Returns a human readable presentation of how long this item is already in the queue.
+         * E.g. something like '3 minutes 40 seconds'
+         */
+        public String getInQueueForString() {
+            long duration = System.currentTimeMillis() - this.inQueueSince;
+            return Util.getTimeSpanString(duration);
+        }
 
         /**
          * Can be used to wait for the completion (either normal, abnormal, or cancellation) of the {@link Task}.
@@ -1240,6 +1267,14 @@ public class Queue extends ResourceController implements Saveable {
          */
         public Future<Executable> getFuture() { return future; }
 
+        /**
+         * If this task needs to be run on a node with a particular label,
+         * return that {@link Label}. Otherwise null, indicating
+         * it can run on anywhere.
+         * 
+         * <p>
+         * This code takes {@link LabelAssignmentAction} into account, then fall back to {@link SubTask#getAssignedLabel()}
+         */
         public Label getAssignedLabel() {
             for (LabelAssignmentAction laa : getActions(LabelAssignmentAction.class)) {
                 Label l = laa.getAssignedLabel(task);
@@ -1265,11 +1300,20 @@ public class Queue extends ResourceController implements Saveable {
             this.task = task;
             this.id = id;
             this.future = future;
+            this.inQueueSince = System.currentTimeMillis();
+            for (Action action: actions) addAction(action);
+        }
+        
+        protected Item(Task task, List<Action> actions, int id, FutureImpl future, long inQueueSince) {
+            this.task = task;
+            this.id = id;
+            this.future = future;
+            this.inQueueSince = inQueueSince;
             for (Action action: actions) addAction(action);
         }
         
         protected Item(Item item) {
-        	this(item.task, item.getActions(), item.id, item.future);
+        	this(item.task, item.getActions(), item.id, item.future, item.inQueueSince);
         }
 
         /**
@@ -1464,6 +1508,13 @@ public class Queue extends ResourceController implements Saveable {
                     return CauseOfBlockage.fromMessage(Messages._Queue_InProgress());
                 return CauseOfBlockage.fromMessage(Messages._Queue_BlockedBy(r.getDisplayName()));
             }
+            
+            for (QueueTaskDispatcher d : QueueTaskDispatcher.all()) {
+                CauseOfBlockage cause = d.canRun(this);
+                if (cause != null)
+                    return cause;
+            }
+            
             return task.getCauseOfBlockage();
         }
     }
@@ -1591,6 +1642,26 @@ public class Queue extends ResourceController implements Saveable {
 			public String toString(Object object) {
 				Run<?,?> run = (Run<?,?>) object;
 				return run.getParent().getFullName() + "#" + run.getNumber();
+			}
+        });
+
+        /**
+         * Reconnect every reference to {@link Queue} by the singleton.
+         */
+        XSTREAM.registerConverter(new AbstractSingleValueConverter() {
+			@Override
+			public boolean canConvert(Class klazz) {
+				return Queue.class.isAssignableFrom(klazz);
+			}
+
+			@Override
+			public Object fromString(String string) {
+                return Jenkins.getInstance().getQueue();
+			}
+
+			@Override
+			public String toString(Object item) {
+                return "queue";
 			}
         });
     }
